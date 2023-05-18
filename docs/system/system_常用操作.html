@@ -4,7 +4,7 @@
     <head>
         <meta charset="UTF-8">
         <meta content="text/html; charset=utf-8" http-equiv="Content-Type">
-        <title>ELF · GitBook</title>
+        <title>System 常用操作 · GitBook</title>
         <meta http-equiv="X-UA-Compatible" content="IE=edge" />
         <meta name="description" content="">
         <meta name="generator" content="GitBook 3.2.3">
@@ -69,10 +69,8 @@
     <link rel="shortcut icon" href="../gitbook/images/favicon.ico" type="image/x-icon">
 
     
-    <link rel="next" href="format_string.html" />
     
-    
-    <link rel="prev" href="README.md" />
+    <link rel="prev" href="stack.html" />
     
 
     </head>
@@ -128,7 +126,7 @@
             <ul class="articles">
                 
     
-        <li class="chapter active" data-level="1.2.1" data-path="ELF.html">
+        <li class="chapter " data-level="1.2.1" data-path="ELF.html">
             
                 <a href="ELF.html">
             
@@ -180,7 +178,7 @@
             
         </li>
     
-        <li class="chapter " data-level="1.2.5" data-path="system_常用操作.html">
+        <li class="chapter active" data-level="1.2.5" data-path="system_常用操作.html">
             
                 <a href="system_常用操作.html">
             
@@ -228,7 +226,7 @@
     <!-- Title -->
     <h1>
         <i class="fa fa-circle-o-notch fa-spin"></i>
-        <a href=".." >ELF</a>
+        <a href=".." >System 常用操作</a>
     </h1>
 </div>
 
@@ -244,14 +242,69 @@
                                 <section class="normal markdown-section">
                                 
                                 <div class="treeview__container"><ul>
-<li><div><a href="#elf">ELF</a><i></i></div></li>
+<li><div><a href="#&#x5E38;&#x7528;&#x64CD;&#x4F5C;">&#x5E38;&#x7528;&#x64CD;&#x4F5C;</a><i class="level__parent level__item level__parent--opened" state="opened" onclick="var curState = this.getAttribute(&apos;state&apos;);var nextState = curState === &apos;opened&apos; ? &apos;hidden&apos; : &apos;opened&apos;;this.setAttribute(&apos;state&apos;, nextState);this.className = this.className.split(curState).join(nextState);var list = this.parentNode.nextElementSibling;if (nextState === &apos;hidden&apos;) {    list.style.display = &apos;none&apos;;} else {    list.style.display = &apos;block&apos;;}"></i></div>
+<ul>
+<li><div><a href="#linux&#x67E5;&#x627E;&#x6587;&#x4EF6;">Linux&#x67E5;&#x627E;&#x6587;&#x4EF6;</a><i></i></div></li>
+<li><div><a href="#vim&#x64CD;&#x4F5C;">VIM&#x64CD;&#x4F5C;</a><i></i></div></li>
+<li><div><a href="#vmware&#x5171;&#x4EAB;&#x6587;&#x4EF6;&#x5939;">vmware&#x5171;&#x4EAB;&#x6587;&#x4EF6;&#x5939;</a><i></i></div></li>
+<li><div><a href="#ubuntu&#x89E3;&#x538B;&#x7F29;">ubuntu&#x89E3;&#x538B;&#x7F29;</a><i></i></div></li>
+<li><div><a href="#ubuntu&#x4F7F;&#x7528;vscode&#x8FDC;&#x7A0B;&#x5F00;&#x53D1;">ubuntu&#x4F7F;&#x7528;vscode&#x8FDC;&#x7A0B;&#x5F00;&#x53D1;</a><i></i></div></li>
+</ul></li>
 </ul>
 </div>
 
 <p>[toc]</p>
-<h1 id="elf">ELF</h1>
-<p><img src="http://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202212081706746.png" alt="image-20221208170653149"></p>
+<h1 id="&#x5E38;&#x7528;&#x64CD;&#x4F5C;">&#x5E38;&#x7528;&#x64CD;&#x4F5C;</h1>
+<h2 id="linux&#x67E5;&#x627E;&#x6587;&#x4EF6;">Linux&#x67E5;&#x627E;&#x6587;&#x4EF6;</h2>
+<pre><code class="lang-bash">find /etc -name <span class="hljs-string">&quot;php.ini&quot;</span>
+</code></pre>
+<h2 id="vim&#x64CD;&#x4F5C;">VIM&#x64CD;&#x4F5C;</h2>
+<p>&#x56DE;&#x5230;&#x9876;&#x90E8;</p>
+<pre><code class="lang-bash">gg
+</code></pre>
+<p>&#x5220;&#x9664;&#x5F53;&#x524D;&#x4EE5;&#x4E0B;&#x6240;&#x6709;</p>
+<pre><code class="lang-bash">dG
+</code></pre>
+<p>&#x67E5;&#x627E;&#x5185;&#x5BB9;</p>
+<pre><code class="lang-bash">/ <span class="hljs-comment"># &#x5524;&#x8D77;&#x67E5;&#x627E;&#xFF0C;&#x8F93;&#x5165;&#x5B8C;&#x6210;&#x540E;&#x56DE;&#x8F66;</span>
+n <span class="hljs-comment"># &#x524D;&#x5411;&#x67E5;&#x627E;</span>
+N <span class="hljs-comment"># &#x53CD;&#x5411;&#x67E5;&#x627E;</span>
+</code></pre>
+<h2 id="vmware&#x5171;&#x4EAB;&#x6587;&#x4EF6;&#x5939;">vmware&#x5171;&#x4EAB;&#x6587;&#x4EF6;&#x5939;</h2>
+<p>&#x6211;&#x73B0;&#x5728;&#x8BBE;&#x7F6E;&#x5230;&#x4E86;&#x4E3B;&#x673A;&#x684C;&#x9762;&#x7684;<code>vmware_share</code></p>
+<p>&#x5728;<code>ubuntu</code>&#x4E0B;&#x662F;&#x5728;<code>/mnt/hgfs/vmware_share</code></p>
+<h2 id="ubuntu&#x89E3;&#x538B;&#x7F29;">ubuntu&#x89E3;&#x538B;&#x7F29;</h2>
+<pre><code class="lang-bash">tar &#x2013;xvf file.tar //&#x89E3;&#x538B; tar&#x5305;
 
+tar -xzvf file.tar.gz //&#x89E3;&#x538B;tar.gz
+
+tar -xjvf file.tar.bz2   //&#x89E3;&#x538B; tar.bz2
+
+tar &#x2013;xZvf file.tar.Z   //&#x89E3;&#x538B;tar.Z
+
+unrar e file.rar //&#x89E3;&#x538B;rar
+
+unzip file.zip //&#x89E3;&#x538B;zip
+
+&#x603B;&#x7ED3;&#xFF1A;
+
+  (1)&#x3001;*.tar &#x7528; tar &#x2013;xvf &#x89E3;&#x538B;
+  (2)&#x3001;*.gz &#x7528; gzip <span class="hljs-_">-d</span>&#x6216;&#x8005;gunzip &#x89E3;&#x538B;
+  (3)&#x3001;*.tar.gz&#x548C;*.tgz &#x7528; tar &#x2013;xzf &#x89E3;&#x538B;
+  (4)&#x3001;*.bz2 &#x7528; bzip2 <span class="hljs-_">-d</span>&#x6216;&#x8005;&#x7528;bunzip2 &#x89E3;&#x538B;
+  (5)&#x3001;*.tar.bz2&#x7528;tar &#x2013;xjf &#x89E3;&#x538B;
+  (6)&#x3001;*.Z &#x7528; uncompress &#x89E3;&#x538B;
+  (7)&#x3001;*.tar.Z &#x7528;tar &#x2013;xZf &#x89E3;&#x538B;
+  (8)&#x3001;*.rar &#x7528; unrar e&#x89E3;&#x538B;
+  (9)&#x3001;*.zip &#x7528; unzip &#x89E3;&#x538B;
+</code></pre>
+<h2 id="ubuntu&#x4F7F;&#x7528;vscode&#x8FDC;&#x7A0B;&#x5F00;&#x53D1;">ubuntu&#x4F7F;&#x7528;vscode&#x8FDC;&#x7A0B;&#x5F00;&#x53D1;</h2>
+<p>&#x547D;&#x4EE4;&#x884C;&#x4E0B;ssh&#x547D;&#x4EE4;&#xFF1A;</p>
+<pre><code class="lang-bash">ssh ltfall@192.168.81.159
+</code></pre>
+<p>&#x5728;vscode&#x4E2D;&#xFF0C;&#x82E5;&#x60F3;&#x6253;&#x5F00;ubuntu&#x7684;&#x7EC8;&#x7AEF;&#xFF0C;&#x4F7F;&#x7528;&#xFF1A;</p>
+<pre><code>ctrl+shift+`(&#x6CE2;&#x6D6A;&#x53F7;)
+</code></pre>
                                 
                                 </section>
                             
@@ -278,14 +331,10 @@
 
             
                 
-                <a href="README.md" class="navigation navigation-prev " aria-label="Previous page: System">
+                <a href="stack.html" class="navigation navigation-prev navigation-unique" aria-label="Previous page: Stack">
                     <i class="fa fa-angle-left"></i>
                 </a>
                 
-                
-                <a href="format_string.html" class="navigation navigation-next " aria-label="Next page: Format String">
-                    <i class="fa fa-angle-right"></i>
-                </a>
                 
             
         
@@ -294,7 +343,7 @@
     <script>
         var gitbook = gitbook || [];
         gitbook.push(function() {
-            gitbook.page.hasChanged({"page":{"title":"ELF","level":"1.2.1","depth":2,"next":{"title":"Format String","level":"1.2.2","depth":2,"path":"system/format_string.md","ref":"system/format_string.md","articles":[]},"previous":{"title":"System","level":"1.2","depth":1,"path":"system/README.md","ref":"system/README.md","articles":[{"title":"ELF","level":"1.2.1","depth":2,"path":"system/ELF.md","ref":"system/ELF.md","articles":[]},{"title":"Format String","level":"1.2.2","depth":2,"path":"system/format_string.md","ref":"system/format_string.md","articles":[]},{"title":"Heap","level":"1.2.3","depth":2,"path":"system/heap.md","ref":"system/heap.md","articles":[]},{"title":"Stack","level":"1.2.4","depth":2,"path":"system/stack.md","ref":"system/stack.md","articles":[]},{"title":"System 常用操作","level":"1.2.5","depth":2,"path":"system/system_常用操作.md","ref":"system/system_常用操作.md","articles":[]}]},"dir":"ltr"},"config":{"gitbook":"*","theme":"default","variables":{},"plugins":["expandable-chapters-small","code","page-treeview","livereload"],"pluginsConfig":{"page-treeview":{"collapsed":false,"copyright":"Copyright © aleen42","minHeaderCount":"1","minHeaderDeep":"1"},"livereload":{},"search":{},"lunr":{"maxIndexSize":1000000,"ignoreSpecialCharacters":false},"code":{"copyButtons":true},"fontsettings":{"theme":"white","family":"sans","size":2},"highlight":{},"expandable-chapters-small":{},"sharing":{"facebook":true,"twitter":true,"google":false,"weibo":false,"instapaper":false,"vk":false,"all":["facebook","google","twitter","weibo","instapaper"]},"theme-default":{"styles":{"website":"styles/website.css","pdf":"styles/pdf.css","epub":"styles/epub.css","mobi":"styles/mobi.css","ebook":"styles/ebook.css","print":"styles/print.css"},"showLevel":false}},"structure":{"langs":"LANGS.md","readme":"README.md","glossary":"GLOSSARY.md","summary":"SUMMARY.md"},"pdf":{"pageNumbers":true,"fontSize":12,"fontFamily":"Arial","paperSize":"a4","chapterMark":"pagebreak","pageBreaksBefore":"/","margin":{"right":62,"left":62,"top":56,"bottom":56}},"styles":{"website":"styles/website.css","pdf":"styles/pdf.css","epub":"styles/epub.css","mobi":"styles/mobi.css","ebook":"styles/ebook.css","print":"styles/print.css"}},"file":{"path":"system/ELF.md","mtime":"2023-05-18T04:11:54.392Z","type":"markdown"},"gitbook":{"version":"3.2.3","time":"2023-05-18T04:47:20.704Z"},"basePath":"..","book":{"language":""}});
+            gitbook.page.hasChanged({"page":{"title":"System 常用操作","level":"1.2.5","depth":2,"previous":{"title":"Stack","level":"1.2.4","depth":2,"path":"system/stack.md","ref":"system/stack.md","articles":[]},"dir":"ltr"},"config":{"gitbook":"*","theme":"default","variables":{},"plugins":["expandable-chapters-small","code","page-treeview"],"pluginsConfig":{"page-treeview":{"collapsed":false,"copyright":"Copyright © aleen42","minHeaderCount":"1","minHeaderDeep":"1"},"search":{},"lunr":{"maxIndexSize":1000000,"ignoreSpecialCharacters":false},"code":{"copyButtons":true},"fontsettings":{"theme":"white","family":"sans","size":2},"highlight":{},"expandable-chapters-small":{},"sharing":{"facebook":true,"twitter":true,"google":false,"weibo":false,"instapaper":false,"vk":false,"all":["facebook","google","twitter","weibo","instapaper"]},"theme-default":{"styles":{"website":"styles/website.css","pdf":"styles/pdf.css","epub":"styles/epub.css","mobi":"styles/mobi.css","ebook":"styles/ebook.css","print":"styles/print.css"},"showLevel":false}},"structure":{"langs":"LANGS.md","readme":"README.md","glossary":"GLOSSARY.md","summary":"SUMMARY.md"},"pdf":{"pageNumbers":true,"fontSize":12,"fontFamily":"Arial","paperSize":"a4","chapterMark":"pagebreak","pageBreaksBefore":"/","margin":{"right":62,"left":62,"top":56,"bottom":56}},"styles":{"website":"styles/website.css","pdf":"styles/pdf.css","epub":"styles/epub.css","mobi":"styles/mobi.css","ebook":"styles/ebook.css","print":"styles/print.css"}},"file":{"path":"system/system_常用操作.md","mtime":"2023-01-20T10:51:23.411Z","type":"markdown"},"gitbook":{"version":"3.2.3","time":"2023-05-18T09:41:16.366Z"},"basePath":"..","book":{"language":""}});
         });
     </script>
 </div>
@@ -309,10 +358,6 @@
     
         
         <script src="../gitbook/gitbook-plugin-code/plugin.js"></script>
-        
-    
-        
-        <script src="../gitbook/gitbook-plugin-livereload/plugin.js"></script>
         
     
         
