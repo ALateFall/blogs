@@ -14,6 +14,7 @@
   - [unsorted_bin](ai/thing.md)
 
 - [unsorted_notes](unsortedbin/README.md)
-  - [Frequent operations](unsortedbin/%E5%B8%B8%E7%94%A8%E6%93%8D%E4%BD%9C.md)
-  - [docker](unsortedbin/docker%E4%BD%BF%E7%94%A8.md)
+  - [Frequent operations](unsortedbin/常用操作.md)
+  - [docker](unsortedbin/docker使用.md)
   - [vim](unsortedbin/vim.md)
+  - [gitbook](unsortedbin/gitbook.md)
