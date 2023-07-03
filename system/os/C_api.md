@@ -114,3 +114,52 @@ while (token != NULL) {
 }
 ```
 
+## 其他
+
+### 接收可变参数库stdarg.h
+
+头文件：
+
+```C
+#include<stdarg.h>
+```
+
+变量定义：
+
+```C
+va_list args; // 定义可变参数列表
+va_start(args, last); // 根据last来初始化args列表。last表示最后一个固定的参数，将从此参数开始接收可变列表
+va_arg(args, type); // 根据type来接收一个参数，类似于迭代器，会自动指向下一个参数。type可以为int、char、double等。 
+va_end(args); // 结束接收参数
+```
+
+一个简单的例子如下：
+
+```C
+#include <stdarg.h>
+
+int sum(int count, ...)
+{
+    int result = 0;
+    va_list args;
+    va_start(args, count);
+
+    for (int i = 0; i < count; i++)
+    {
+        int num = va_arg(args, int);
+        result += num;
+    }
+
+    va_end(args);
+    return result;
+}
+
+int main()
+{
+    printValues(3, 10, 20, 30); // 传递三个整数参数
+
+    return 0;
+}
+```
+
+可以看到，只需要在编写函数的接收参数的地方写下省略号，即可完成可变参数的接收。

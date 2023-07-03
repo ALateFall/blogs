@@ -2,7 +2,7 @@
 
 ## checksec总结
 
-- RELRO：RELRO会有Partial RELRO和FULL RELRO，如果开启FULL RELRO，意味着我们无法修改got表
+- RELRO：当`RELRO`保护为`NO RELRO`的时候，`init.array、fini.array、got.plt`均可读可写；为`PARTIAL RELRO`的时候，`ini.array、fini.array`可读不可写，`got.plt`可读可写；为`FULL RELRO`时，`init.array、fini.array、got.plt`均可读不可写。
 
 - Canary（Stack）：栈溢出保护。这是一种缓冲区溢出攻击的缓解手段。如果启用栈保护，那么函数开始执行的时候会先往栈里插入cookie信息，当函数真正返回的时候再次验证cookie信息是否合法，若不合法，则程序停止运行。因此，攻击者在覆盖返回地址的时候，容易将cookie地址同样覆盖掉，导致栈保护检查失败，shellcode无法执行。Linux中的cookie信息便称为canary。如果栈中开启Canary found，那么就不能用直接用溢出的方法覆盖栈中返回地址，而且要通过改写指针与局部变量、leak canary、overwrite canary的方法来绕过
 

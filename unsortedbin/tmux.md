@@ -110,7 +110,7 @@ tmux split-window
 也可以划分左右两个窗口
 
 ```
-tmux split-window
+tmux split-window -h
 ```
 
 快捷键方式：
