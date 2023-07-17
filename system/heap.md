@@ -74,12 +74,10 @@ one_gadget ./libc.so.6 # 得到的是基于libc_base的gadget地址
 由此，若使用`glibc2.23`，则编译命令为：
 
 ```gcc
-gcc -Wl,-rpath='/home/ltfall/Desktop/pwn/glibc-all-in-one/libs/2.23-0ubuntu3_amd64/',-dynamic-linker='/home/ltfall/Desktop/pwn/glibc-all-in-one/libs/2.23-0ubuntu3_amd64/ld-linux-x86-64.so.2' ./test.c -o test
+gcc -Wl,-rpath='/home/ltfall/Desktop/pwn/glibc-all-in-one/libs/2.23-0ubuntu3_amd64/',-dynamic-linker='/home/ltfall/Desktop/pwn/glibc-all-in-one/libs/2.23-0ubuntu3_amd64/ld-linux-x86-64.so.2' -g ./test.c -o test
 ```
 
 即分别指定了`-rpath`和`-dynamic-linker`。
-
-
 
 ## 使用patchelf
 
@@ -116,7 +114,7 @@ ldd ./uunlink
 
 ## glibc源码
 
-我是在[这里]([glibc package : Ubuntu (launchpad.net)](https://launchpad.net/ubuntu/+source/glibc/))找的，找到对应版本，比如我这里是想看看`2.23-0ubuntu3`的，就下了这个：
+我是在[这里](https://launchpad.net/ubuntu/+source/glibc/)找的，找到对应版本，比如我这里是想看看`2.23-0ubuntu3`的，就下了这个：
 
 ![image-20230108194726875](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202301081947999.png)
 
@@ -131,8 +129,6 @@ ldd ./uunlink
 ![image-20230108195407693](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202301081954192.png)
 
 打开之后，发现是在`glibc/malloc/malloc.c`里面。开始`read the fucking code`吧。
-
-
 
 ## unsafe unlink
 
@@ -782,11 +778,11 @@ sh.sendline('4')
 sh.interactive()
 ```
 
-## unsorted bin attack
+## unsortedbin attack
 
 广义上的`unsorted bin attack`其实分为`unsorted bin leak`和`unsorted bin attack`，前者可以根据`unsorted bin`的特性来泄露出`libc`的地址，后者的作用是对一个指定地址写入一个非常大的值（其实是写入`main_arena`的地址的一个偏移）。
 
-### unsorted bin特性
+### unsortedbin特性
 
 首先是`unsorted bin`的来源，这里抄一下`wiki`
 
@@ -807,11 +803,11 @@ sh.interactive()
 
 ![img](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/876323_83TKRFDZJ5XP3GC.jpg)
 
-### unsorted bin leak
+### unsortedbin leak
 
 从上图也可以看到，与`unsorted bin`直接相连的一个`bin`是最后插入到`unsorted bin`里面来的。它的`bk`指针指向`unsorted bin`。换句话说，它的`bk`指针指向`main_arena`的一个固定偏移，而`main_arena`和`libc_base`也有一个固定偏移，那么只要泄露出来了它的`bk`指针，也就不愁计算出`libc`的地址了。这里用先插入到`unsorted bin`的`fd`指针也是同理的。
 
-### unsorted bin attack
+### unsortedbin attack
 
 作用是向指定地址写入一个非常大的值，即`main_arena`的一个固定偏移。
 
@@ -862,6 +858,551 @@ bck->fd = unsorted_chunks (av);
 ![image-20230623152236540](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/image-20230623152236540.png)
 
 至此，已经实现了攻击。
+
+## malloc源码解读
+
+这里是`glibc 2.23-0ubuntu3`中的`./malloc/mallo.c`部分
+
+```c
+static void *
+_int_malloc (mstate av, size_t bytes)
+{
+  INTERNAL_SIZE_T nb;               /* normalized request size */
+  unsigned int idx;                 /* associated bin index */
+  mbinptr bin;                      /* associated bin */
+
+  mchunkptr victim;                 /* inspected/selected chunk */
+  INTERNAL_SIZE_T size;             /* its size */
+  int victim_index;                 /* its bin index */
+
+  mchunkptr remainder;              /* remainder from a split */
+  unsigned long remainder_size;     /* its size */
+
+  unsigned int block;               /* bit map traverser */
+  unsigned int bit;                 /* bit map traverser */
+  unsigned int map;                 /* current word of binmap */
+
+  mchunkptr fwd;                    /* misc temp for linking */
+  mchunkptr bck;                    /* misc temp for linking */
+
+  const char *errstr = NULL;
+
+  /*
+     Convert request size to internal form by adding SIZE_SZ bytes
+     overhead plus possibly more to obtain necessary alignment and/or
+     to obtain a size of at least MINSIZE, the smallest allocatable
+     size. Also, checked_request2size traps (returning 0) request sizes
+     that are so large that they wrap around zero when padded and
+     aligned.
+   */
+
+  checked_request2size (bytes, nb); // 将用户请求的大小转化为一个合法的大小，变量名为nb
+
+  /* There are no usable arenas.  Fall back to sysmalloc to get a chunk from
+     mmap.  */
+  if (__glibc_unlikely (av == NULL)) // 大意应该是在还没有arena的时候使用mmap来分配chunk
+    {
+      void *p = sysmalloc (nb, av);
+      if (p != NULL)
+	alloc_perturb (p, bytes);
+      return p;
+    }
+
+  /*
+     If the size qualifies as a fastbin, first check corresponding bin.
+     This code is safe to execute even if av is not yet initialized, so we
+     can try it without checking, which saves some time on this fast path.
+   */
+
+  if ((unsigned long) (nb) <= (unsigned long) (get_max_fast ())) // 请求的大小在fastbin之内
+    {
+      idx = fastbin_index (nb); // 确定它属于10个fastbin的哪一个，获得下标
+      mfastbinptr *fb = &fastbin (av, idx); // 根据下标获取这个fastbin的头
+      mchunkptr pp = *fb; // 根据这个fastbin的头获得它的第一个chunk
+      // 下面待看
+      do
+        {
+          victim = pp; 
+          if (victim == NULL)
+            break;
+        }
+      while ((pp = catomic_compare_and_exchange_val_acq (fb, victim->fd, victim))
+             != victim);
+      if (victim != 0)
+        {
+          if (__builtin_expect (fastbin_index (chunksize (victim)) != idx, 0))
+            {
+              errstr = "malloc(): memory corruption (fast)";
+            errout:
+              malloc_printerr (check_action, errstr, chunk2mem (victim), av);
+              return NULL;
+            }
+          check_remalloced_chunk (av, victim, nb);
+          void *p = chunk2mem (victim);
+          alloc_perturb (p, bytes);
+          return p;
+        }
+    }
+
+  /*
+     If a small request, check regular bin.  Since these "smallbins"
+     hold one size each, no searching within bins is necessary.
+     (For a large request, we need to wait until unsorted chunks are
+     processed to find best fit. But for small ones, fits are exact
+     anyway, so we can check now, which is faster.)
+   */
+
+  if (in_smallbin_range (nb)) // 请求的大小位于smallbin
+    {
+      idx = smallbin_index (nb); // 请求的大小属于哪一个smallbin，找到下标idx
+      bin = bin_at (av, idx); // 通过下标找到具体的这个bin
+
+      if ((victim = last (bin)) != bin) // last宏就是#define last(b) (b->bk)，因此就是定位到smallbin的最后一个chunk，而且smallbin不为空（bin->bk!=bin）
+        {
+          if (victim == 0) /* initialization check */
+              // 假如smallbin为空，那么这里不会进行分配，要到后面unsortedbin。
+            malloc_consolidate (av);
+          else // 定位到了这个smallbin，取出里面的一个chunk，从队尾开始取
+            {
+              bck = victim->bk; // bck是victim的bk，也就是倒数第二个
+	if (__glibc_unlikely (bck->fd != victim)) // bck的fd假如不为victim说明出错
+                {
+                  errstr = "malloc(): smallbin double linked list corrupted";
+                  goto errout;
+                }
+              set_inuse_bit_at_offset (victim, nb); // 取出这个victim。也就是队尾的这一个。
+              bin->bk = bck; // 取出后，bin的bk将会变成倒数第二个chunk
+              bck->fd = bin; // 取出后，倒数第二个chunk将会指向small bin
+
+              if (av != &main_arena) // 假如不是在主线程(main_arena)，做额外操作
+                victim->size |= NON_MAIN_ARENA;
+              check_malloced_chunk (av, victim, nb);
+              void *p = chunk2mem (victim); // 获得指向可用区域的指针
+              alloc_perturb (p, bytes);
+              return p; // 返回该指针
+            }
+        }
+    }
+
+  /*
+     If this is a large request, consolidate fastbins before continuing.
+     While it might look excessive to kill all fastbins before
+     even seeing if there is space available, this avoids
+     fragmentation problems normally associated with fastbins.
+     Also, in practice, programs tend to have runs of either small or
+     large requests, but less often mixtures, so consolidation is not
+     invoked all that often in most programs. And the programs that
+     it is called frequently in otherwise tend to fragment.
+   */
+
+  else // 假如该大小是属于largebin，这里是不会取出来的
+    {
+      idx = largebin_index (nb); // 定位到哪一个largebin
+      if (have_fastchunks (av)) // 假如有fastbin chunk，根据上面的注释说是要杀光光，暂时没弄明白
+        malloc_consolidate (av); 
+    }
+
+  /*
+     Process recently freed or remaindered chunks, taking one only if
+     it is exact fit, or, if this a small request, the chunk is remainder from
+     the most recent non-exact fit.  Place other traversed chunks in
+     bins.  Note that this step is the only place in any routine where
+     chunks are placed in bins.
+
+     The outer loop here is needed because we might not realize until
+     near the end of malloc that we should have consolidated, so must
+     do so and retry. This happens at most once, and only when we would
+     otherwise need to expand memory to service a "small" request.
+   */
+
+   
+  for (;; )
+    {
+      int iters = 0;
+      while ((victim = unsorted_chunks (av)->bk) != unsorted_chunks (av)) // 从Unsortedbin尾部开始遍历
+        {
+          bck = victim->bk; // 当前遍历到的chunk的bk叫做bck
+          if (__builtin_expect (victim->size <= 2 * SIZE_SZ, 0)  // 当前遍历到的chunk的大小不合法（小于最小值或者大于最大值），那么退出
+              || __builtin_expect (victim->size > av->system_mem, 0))
+            malloc_printerr (check_action, "malloc(): memory corruption",
+                             chunk2mem (victim), av);
+          size = chunksize (victim); // 得到当前遍历到的chunk的大小，叫做size
+
+          /*
+             If a small request, try to use last remainder if it is the
+             only chunk in unsorted bin.  This helps promote locality for
+             runs of consecutive small requests. This is the only
+             exception to best-fit, and applies only when there is
+             no exact fit for a small chunk.
+           */
+			
+          // 假如申请的chunk在smallbin范围内，且此时只有一个last_remainder在unsortedbin内部，且last_remainder还可以切割
+          if (in_smallbin_range (nb) &&
+              bck == unsorted_chunks (av) &&
+              victim == av->last_remainder &&
+              (unsigned long) (size) > (unsigned long) (nb + MINSIZE))
+            {
+              /* split and reattach remainder */
+              // 将unsorted_bin里面的这个last_remainder切割后重新挂在Unsortedbin里面
+              remainder_size = size - nb; // 切割后的last_remainder的chunk大小
+              remainder = chunk_at_offset (victim, nb); // 切割掉前面的部分，将切割后的指针返回
+              unsorted_chunks (av)->bk = unsorted_chunks (av)->fd = remainder; // unsortedbin的fd和bk都指向剩余的last_remainder
+              av->last_remainder = remainder; // 将全局变量last_remainder赋值为现在切割后的last_remainder
+              remainder->bk = remainder->fd = unsorted_chunks (av); // 同样的，last_remainder的fd和bk也指向unsorted bin
+              if (!in_smallbin_range (remainder_size)) // 若切割后的remainder已经不属于small bin的大小了，那么把fd/bk_nextsize置空
+                {
+                  remainder->fd_nextsize = NULL;
+                  remainder->bk_nextsize = NULL;
+                }
+
+              // 接下来三行是将切割后的两个chunk的header标志位设置好，将切割后的last_remainder的foot设置为他现在的大小（它现在仍然为free)
+              set_head (victim, nb | PREV_INUSE |
+                        (av != &main_arena ? NON_MAIN_ARENA : 0));
+              set_head (remainder, remainder_size | PREV_INUSE);
+              set_foot (remainder, remainder_size);
+
+              check_malloced_chunk (av, victim, nb); // 检查一下分配出去的victim大小是否正确
+              void *p = chunk2mem (victim); // 得到用户指针
+              alloc_perturb (p, bytes);
+              return p;
+            }
+
+          /* remove from unsorted list */
+          unsorted_chunks (av)->bk = bck;
+          bck->fd = unsorted_chunks (av);
+
+          /* Take now instead of binning if exact fit */
+
+          if (size == nb)
+            {
+              set_inuse_bit_at_offset (victim, size);
+              if (av != &main_arena)
+                victim->size |= NON_MAIN_ARENA;
+              check_malloced_chunk (av, victim, nb);
+              void *p = chunk2mem (victim);
+              alloc_perturb (p, bytes);
+              return p;
+            }
+
+          /* place chunk in bin */
+
+          if (in_smallbin_range (size))
+            {
+              victim_index = smallbin_index (size);
+              bck = bin_at (av, victim_index);
+              fwd = bck->fd;
+            }
+          else
+            {
+              victim_index = largebin_index (size);
+              bck = bin_at (av, victim_index);
+              fwd = bck->fd;
+
+              /* maintain large bins in sorted order */
+              if (fwd != bck)
+                {
+                  /* Or with inuse bit to speed comparisons */
+                  size |= PREV_INUSE;
+                  /* if smaller than smallest, bypass loop below */
+                  assert ((bck->bk->size & NON_MAIN_ARENA) == 0);
+                  if ((unsigned long) (size) < (unsigned long) (bck->bk->size))
+                    {
+                      fwd = bck;
+                      bck = bck->bk;
+
+                      victim->fd_nextsize = fwd->fd;
+                      victim->bk_nextsize = fwd->fd->bk_nextsize;
+                      fwd->fd->bk_nextsize = victim->bk_nextsize->fd_nextsize = victim;
+                    }
+                  else
+                    {
+                      assert ((fwd->size & NON_MAIN_ARENA) == 0);
+                      while ((unsigned long) size < fwd->size)
+                        {
+                          fwd = fwd->fd_nextsize;
+                          assert ((fwd->size & NON_MAIN_ARENA) == 0);
+                        }
+
+                      if ((unsigned long) size == (unsigned long) fwd->size)
+                        /* Always insert in the second position.  */
+                        fwd = fwd->fd;
+                      else
+                        {
+                          victim->fd_nextsize = fwd;
+                          victim->bk_nextsize = fwd->bk_nextsize;
+                          fwd->bk_nextsize = victim;
+                          victim->bk_nextsize->fd_nextsize = victim;
+                        }
+                      bck = fwd->bk;
+                    }
+                }
+              else
+                victim->fd_nextsize = victim->bk_nextsize = victim;
+            }
+
+          mark_bin (av, victim_index);
+          victim->bk = bck;
+          victim->fd = fwd;
+          fwd->bk = victim;
+          bck->fd = victim;
+
+#define MAX_ITERS       10000
+          if (++iters >= MAX_ITERS)
+            break;
+        }
+
+      /*
+         If a large request, scan through the chunks of current bin in
+         sorted order to find smallest that fits.  Use the skip list for this.
+       */
+
+      if (!in_smallbin_range (nb))
+        {
+          bin = bin_at (av, idx);
+
+          /* skip scan if empty or largest chunk is too small */
+          if ((victim = first (bin)) != bin &&
+              (unsigned long) (victim->size) >= (unsigned long) (nb))
+            {
+              victim = victim->bk_nextsize;
+              while (((unsigned long) (size = chunksize (victim)) <
+                      (unsigned long) (nb)))
+                victim = victim->bk_nextsize;
+
+              /* Avoid removing the first entry for a size so that the skip
+                 list does not have to be rerouted.  */
+              if (victim != last (bin) && victim->size == victim->fd->size)
+                victim = victim->fd;
+
+              remainder_size = size - nb;
+              unlink (av, victim, bck, fwd);
+
+              /* Exhaust */
+              if (remainder_size < MINSIZE)
+                {
+                  set_inuse_bit_at_offset (victim, size);
+                  if (av != &main_arena)
+                    victim->size |= NON_MAIN_ARENA;
+                }
+              /* Split */
+              else
+                {
+                  remainder = chunk_at_offset (victim, nb);
+                  /* We cannot assume the unsorted list is empty and therefore
+                     have to perform a complete insert here.  */
+                  bck = unsorted_chunks (av);
+                  fwd = bck->fd;
+	  if (__glibc_unlikely (fwd->bk != bck))
+                    {
+                      errstr = "malloc(): corrupted unsorted chunks";
+                      goto errout;
+                    }
+                  remainder->bk = bck;
+                  remainder->fd = fwd;
+                  bck->fd = remainder;
+                  fwd->bk = remainder;
+                  if (!in_smallbin_range (remainder_size))
+                    {
+                      remainder->fd_nextsize = NULL;
+                      remainder->bk_nextsize = NULL;
+                    }
+                  set_head (victim, nb | PREV_INUSE |
+                            (av != &main_arena ? NON_MAIN_ARENA : 0));
+                  set_head (remainder, remainder_size | PREV_INUSE);
+                  set_foot (remainder, remainder_size);
+                }
+              check_malloced_chunk (av, victim, nb);
+              void *p = chunk2mem (victim);
+              alloc_perturb (p, bytes);
+              return p;
+            }
+        }
+
+      /*
+         Search for a chunk by scanning bins, starting with next largest
+         bin. This search is strictly by best-fit; i.e., the smallest
+         (with ties going to approximately the least recently used) chunk
+         that fits is selected.
+
+         The bitmap avoids needing to check that most blocks are nonempty.
+         The particular case of skipping all bins during warm-up phases
+         when no chunks have been returned yet is faster than it might look.
+       */
+
+      ++idx;
+      bin = bin_at (av, idx);
+      block = idx2block (idx);
+      map = av->binmap[block];
+      bit = idx2bit (idx);
+
+      for (;; )
+        {
+          /* Skip rest of block if there are no more set bits in this block.  */
+          if (bit > map || bit == 0)
+            {
+              do
+                {
+                  if (++block >= BINMAPSIZE) /* out of bins */
+                    goto use_top;
+                }
+              while ((map = av->binmap[block]) == 0);
+
+              bin = bin_at (av, (block << BINMAPSHIFT));
+              bit = 1;
+            }
+
+          /* Advance to bin with set bit. There must be one. */
+          while ((bit & map) == 0)
+            {
+              bin = next_bin (bin);
+              bit <<= 1;
+              assert (bit != 0);
+            }
+
+          /* Inspect the bin. It is likely to be non-empty */
+          victim = last (bin);
+
+          /*  If a false alarm (empty bin), clear the bit. */
+          if (victim == bin)
+            {
+              av->binmap[block] = map &= ~bit; /* Write through */
+              bin = next_bin (bin);
+              bit <<= 1;
+            }
+
+          else
+            {
+              size = chunksize (victim);
+
+              /*  We know the first chunk in this bin is big enough to use. */
+              assert ((unsigned long) (size) >= (unsigned long) (nb));
+
+              remainder_size = size - nb;
+
+              /* unlink */
+              unlink (av, victim, bck, fwd);
+
+              /* Exhaust */
+              if (remainder_size < MINSIZE)
+                {
+                  set_inuse_bit_at_offset (victim, size);
+                  if (av != &main_arena)
+                    victim->size |= NON_MAIN_ARENA;
+                }
+
+              /* Split */
+              else
+                {
+                  remainder = chunk_at_offset (victim, nb);
+
+                  /* We cannot assume the unsorted list is empty and therefore
+                     have to perform a complete insert here.  */
+                  bck = unsorted_chunks (av);
+                  fwd = bck->fd;
+	  if (__glibc_unlikely (fwd->bk != bck))
+                    {
+                      errstr = "malloc(): corrupted unsorted chunks 2";
+                      goto errout;
+                    }
+                  remainder->bk = bck;
+                  remainder->fd = fwd;
+                  bck->fd = remainder;
+                  fwd->bk = remainder;
+
+                  /* advertise as last remainder */
+                  if (in_smallbin_range (nb))
+                    av->last_remainder = remainder;
+                  if (!in_smallbin_range (remainder_size))
+                    {
+                      remainder->fd_nextsize = NULL;
+                      remainder->bk_nextsize = NULL;
+                    }
+                  set_head (victim, nb | PREV_INUSE |
+                            (av != &main_arena ? NON_MAIN_ARENA : 0));
+                  set_head (remainder, remainder_size | PREV_INUSE);
+                  set_foot (remainder, remainder_size);
+                }
+              check_malloced_chunk (av, victim, nb);
+              void *p = chunk2mem (victim);
+              alloc_perturb (p, bytes);
+              return p;
+            }
+        }
+
+    use_top:
+      /*
+         If large enough, split off the chunk bordering the end of memory
+         (held in av->top). Note that this is in accord with the best-fit
+         search rule.  In effect, av->top is treated as larger (and thus
+         less well fitting) than any other available chunk since it can
+         be extended to be as large as necessary (up to system
+         limitations).
+
+         We require that av->top always exists (i.e., has size >=
+         MINSIZE) after initialization, so if it would otherwise be
+         exhausted by current request, it is replenished. (The main
+         reason for ensuring it exists is that we may need MINSIZE space
+         to put in fenceposts in sysmalloc.)
+       */
+
+      victim = av->top;
+      size = chunksize (victim);
+
+      if ((unsigned long) (size) >= (unsigned long) (nb + MINSIZE))
+        {
+          remainder_size = size - nb;
+          remainder = chunk_at_offset (victim, nb);
+          av->top = remainder;
+          set_head (victim, nb | PREV_INUSE |
+                    (av != &main_arena ? NON_MAIN_ARENA : 0));
+          set_head (remainder, remainder_size | PREV_INUSE);
+
+          check_malloced_chunk (av, victim, nb);
+          void *p = chunk2mem (victim);
+          alloc_perturb (p, bytes);
+          return p;
+        }
+
+      /* When we are using atomic ops to free fast chunks we can get
+         here for all block sizes.  */
+      else if (have_fastchunks (av))
+        {
+          malloc_consolidate (av);
+          /* restore original bin index */
+          if (in_smallbin_range (nb))
+            idx = smallbin_index (nb);
+          else
+            idx = largebin_index (nb);
+        }
+
+      /*
+         Otherwise, relay to handle system-dependent cases
+       */
+      else
+        {
+          void *p = sysmalloc (nb, av);
+          if (p != NULL)
+            alloc_perturb (p, bytes);
+          return p;
+        }
+    }
+}
+```
+
+## largebin attack
+
+### largebin结构示意图
+
+如下图所示。细心的师傅已经发现了：
+
+- 每一列是同一大小的`chunk`，而每一列是按照`free`的顺序排列的
+- 先`free`的`chunk`成为该列的第一个`chunk`，它的`fd`指针指向后`free`的`chunk`
+- 每一列只有开头的`chunk`拥有`fd_nextsize`和`bk_nextsize`用于指向下一个不同大小的头
+- 其余`chunk`的`fd_nextsize`和`bk_nextsize`的值为0
+- 不同列之间，左边是大`chunk`，右边是小`chunk`，最小的一列`chunk`直接与`largebin`相连
+- 每一列都是双向循环链表
+
+![image-20230703232238755](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/image-20230703232238755.png)
 
 ## 记一次下载glibc 2.23-0ubuntu11.2
 

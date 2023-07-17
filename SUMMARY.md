@@ -9,6 +9,7 @@
   - [Format String](system/format_string.md)
   - [Heap](system/heap.md)
   - [ELF](system/ELF.md)
+  - [Understanding Glibc Malloc](system/understanding_glibc_malloc.md)
   - [unsorted_bin](system/system_常用操作.md)
 - [AI](ai/README.md)
   - [pandas](ai/pandas.md)
@@ -20,3 +21,4 @@
   - [vim](unsortedbin/vim.md)
   - [gitbook](unsortedbin/gitbook.md)
   - [tmux](unsortedbin/tmux.md)
+  - [jupyterlab](unsortedbin/jupyterlab配置.md)
