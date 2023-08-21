@@ -1,3 +1,11 @@
+---
+layout: post
+title: Linux命令小结
+category: 未分类
+date: 2023-8-18
+---
+如题
+<!-- more -->
 [toc]
 
 # Linux 命令

@@ -1,3 +1,11 @@
+---
+layout: post
+title: word2vec入门指北
+category: ai
+date: 2023-8-19
+---
+word2vec的API变化太大，本文以2023年7月的word2vec最新版本进行记录。
+<!-- more -->
 [toc]
 
 # Word2Vec in Gensim

@@ -1,3 +1,11 @@
+---
+layout: post
+title: hexo基础知识
+category: 未分类
+date: 2023-8-18
+---
+使用hexo + markdown编写blog
+<!-- more -->
 [toc]
 
 # hexo(ubutnu)
@@ -15,6 +23,7 @@ sudo apt-get install -y nodejs
 
 ```bash
 npm install -g hexo-cli
-hexo init "your"
+hexo init "your_website_dir"
+# 例如笔者已经在hexo目录下，则使用命令hexo init .
 ```
 

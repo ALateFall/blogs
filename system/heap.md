@@ -1,3 +1,11 @@
+---
+layout: post
+title: glibc漏洞利用指北
+category: system
+date: 2023-8-21
+---
+以ptmalloc2(glibc)的视角来看堆漏洞。
+<!-- more -->
 [toc]
 
 # heap

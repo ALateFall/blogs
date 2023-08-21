@@ -1,3 +1,11 @@
+---
+layout: post
+title: 一些深度学习可能会用到的trick
+category: ai
+date: 2023-8-19
+---
+如题
+<!-- more -->
 [toc]
 
 ## 在服务器上后台运行

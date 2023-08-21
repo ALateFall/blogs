@@ -1,3 +1,11 @@
+---
+layout: post
+title: 终端复用器 - tmux
+category: 未分类
+date: 2023-8-18
+---
+tmux是一个可以在后台运行终端，也可以拆分终端的终端管理器。
+<!-- more -->
 [toc]
 
 # tmux - 终端复用器

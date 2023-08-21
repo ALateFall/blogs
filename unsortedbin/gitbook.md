@@ -1,3 +1,11 @@
+---
+layout: post
+title: gitbook入门指南
+category: 未分类
+date: 2023-8-18
+---
+曾经用过gitbook搭建blog
+<!-- more -->
 [toc]
 
 # Gitbook

@@ -1,3 +1,11 @@
+---
+layout: post
+title: huggingface入门
+category: ai
+date: 2023-8-19
+---
+本文记录了huggingface的基本使用，包括数据集和模型下载/使用等。
+<!-- more -->
 [toc]
 
 # Huggingface入门指南（NLP）

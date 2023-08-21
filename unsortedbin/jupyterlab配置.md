@@ -1,3 +1,11 @@
+---
+layout: post
+title: jupyterlab配置
+category: 未分类
+date: 2023-8-18
+---
+记录作者在配置jupyterlab的一些坑
+<!-- more -->
 [toc]
 
 # Jupyter Lab配置

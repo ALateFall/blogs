@@ -1,3 +1,11 @@
+---
+layout: post
+title: 经典文章阅读：Understanding glibc malloc
+category: system
+date: 2023-8-21
+---
+对经典文章Understanding glibc malloc的阅读笔记&夹带自己理解的翻译
+<!-- more -->
 [toc]
 
 # Understanding glibc malloc 详解

@@ -1,3 +1,11 @@
+---
+layout: post
+title: ctfshow writeup
+category: web安全
+date: 2023-8-17
+---
+远古笔记
+<!-- more -->
 [toc]
 
 # WP

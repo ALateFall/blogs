@@ -1,3 +1,11 @@
+---
+layout: post
+title: 比较杂的ai知识
+category: pandas知识点小结
+date: 2023-8-19
+---
+本文是作者多年以前学习Pandas的总结，可以当作字典来查。
+<!-- more -->
 [toc]
 
 

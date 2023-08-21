@@ -1,3 +1,11 @@
+---
+layout: post
+title: pytorch入门小结
+category: ai
+date: 2023-8-19
+---
+本文是作者对pytorch最基础的一些网络的编写的记录。
+<!-- more -->
 [toc]
 
 # pytorch基本使用

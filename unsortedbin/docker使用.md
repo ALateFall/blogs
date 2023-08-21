@@ -1,3 +1,11 @@
+---
+layout: post
+title: docker入门指南&从零配置一台ubuntu容器
+category: 未分类
+date: 2023-8-18
+---
+本文记录了docker的一些基本操作以及如何一步一步配置一台ubuntu的容器，进行基础设置。
+<!-- more -->
 [toc]
 
 # docker基本操作

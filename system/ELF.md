@@ -1,3 +1,11 @@
+---
+layout: post
+title: ELF文件结构图
+category: system
+date: 2023-8-21
+---
+如题
+<!-- more -->
 [toc]
 
 # ELF

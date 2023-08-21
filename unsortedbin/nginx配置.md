@@ -1,3 +1,11 @@
+---
+layout: post
+title: nginx入门指北
+category: 未分类
+date: 2023-8-18
+---
+作者使用nginx+hexo搭建blog，由此总结nginx基础知识
+<!-- more -->
 [toc]
 
 # Nginx配置

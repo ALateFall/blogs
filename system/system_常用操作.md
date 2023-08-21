@@ -1,3 +1,11 @@
+---
+layout: post
+title: 一些Linux下的杂乱知识点
+category: system
+date: 2023-8-21
+---
+主要是未分类的知识点。
+<!-- more -->
 [toc]
 
 # 常用操作

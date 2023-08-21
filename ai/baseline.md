@@ -1,3 +1,12 @@
+---
+layout: post
+title: 比较杂的ai知识
+category: ai
+date: 2023-8-19
+---
+本文对深度学习中的一些基础知识点进行记录。
+<!-- more -->
+
 [toc]
 
 # Baselines

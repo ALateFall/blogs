@@ -1,3 +1,11 @@
+---
+layout: post
+title: vim的使用方法
+category: 未分类
+date: 2023-8-18
+---
+如题
+<!-- more -->
 # vim快捷键使用
 
 本文基于`vim`教程`vimtutor`。使用`vimtutor zh`可以查看中文版教程。

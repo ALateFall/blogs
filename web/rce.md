@@ -1,3 +1,11 @@
+---
+layout: post
+title: 远程命令执行小结
+category: web安全
+date: 2023-8-17
+---
+远古笔记
+<!-- more -->
 [toc]
 
 # RCE

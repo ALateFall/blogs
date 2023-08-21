@@ -1,3 +1,11 @@
+---
+layout: post
+title: php特性小结
+category: web安全
+date: 2023-8-17
+---
+远古笔记
+<!-- more -->
 [toc]
 
 # PHP特性
