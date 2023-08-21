@@ -2,7 +2,7 @@
 layout: post
 title: glibc漏洞利用指北
 category: system
-date: 2023-8-21
+date: 2023-8-21 21:04:32
 ---
 以ptmalloc2(glibc)的视角来看堆漏洞。
 <!-- more -->
