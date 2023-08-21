@@ -21,8 +21,6 @@
 - FORTIFY：FORTIFY_SOURCE机制对格式化字符串有两个限制(1)包含%n的格式化字符串不能位于程序内存中的可写地址。(2)当使用位置参数时，必须使用范围内的所有参数。所以如果要使用%7$x，你必须同时使用1,2,3,4,5和6。
 - RWX：若`Has RWX segments`，那么说明含有可读，可写，可执行段。
 
-
-
 - `gcc`编译
 
 来一个完整版不带保护32位的：
@@ -31,8 +29,8 @@
 gcc -m32 -Og -fno-stack-protector -no-pie -z execstack -o level1 level1.c
 # -m32 生成32位程序
 # -Og 不开启编译器优化
-# -fno-stack-protector 关闭NX(DEP)
-# -z execstack 关闭canary(stack protector)
+# -fno-stack-protector 不开启canary
+# -z execstack 栈可执行
 # 对于ASLR,关闭方式是在ROOT权限下执行： echo 0 > /proc/sys/kernel/randomize_va_space
 ```
 
@@ -43,7 +41,20 @@ PIE：-no-pie / -pie (关闭 / 开启)
 RELRO：-z norelro / -z lazy / -z now (关闭 / 部分开启 / 完全开启)
 ```
 
+## ASLR和PIE的关系
 
+`PIE`机制是程序本身的安全机制，而`ASLR`是操作系统的安全机制。
+
+`PIE`只决定主程序的加载地址是否随机化，而`ASLR`决定堆地址/栈地址/共享库地址是否随机化。列表如下：
+
+| ASLR | PIE  | 主程序加载地址 | 堆地址 | 栈地址 | 共享库地址 |
+| ---- | ---- | -------------- | ------ | ------ | ---------- |
+| 开启 | 开启 | 随机           | 随机   | 随机   | 随机       |
+| 开启 | 关闭 | 固定           | 随机   | 随机   | 随机       |
+| 关闭 | 开启 | 固定           | 固定   | 固定   | 固定       |
+| 关闭 | 关闭 | 固定           | 固定   | 固定   | 固定       |
+
+若关闭了`ASLR`，那么堆地址/栈地址/共享库地址一定是固定的。
 
 ## 栈溢出-确定填充长度
 
@@ -211,8 +222,6 @@ disassemble main
 ```gdb
 attach [pid]
 ```
-
-
 
 ## ida操作
 

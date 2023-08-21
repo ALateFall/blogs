@@ -111,10 +111,14 @@ docker run -it -p 0.0.0.0:"your_port":"ssh_port" --gpus all --name "your_name" -
 例如，我用如下命令创建了我的`pytorch`容器：
 
 ```bash
-docker run -it -p 0.0.0.0:9595:22 --gpus all --name torch_pa -e NVIDIA_DRIVER_CAPABILITIES=compute,utility -e NVIDIA_VISIBLE_DEVICES=all pytorch/pytorch:1.10.0-cuda11.3-cudnn8-devel /bin/bash
+docker run -it -p 0.0.0.0:9595:22 -v /home/puao:/data --gpus all --name torch_pa -e NVIDIA_DRIVER_CAPABILITIES=compute,utility -e NVIDIA_VISIBLE_DEVICES=all pytorch/pytorch:1.10.0-cuda11.3-cudnn8-devel /bin/bash
 ```
 
-其中，`-e NVIDIA_DRIVER_CAPABILITIES=compute,utility` 和 `-e NVIDIA_VISIBLE_DEVICES=all` 是设置环境变量，分别表示驱动程序功能和可见设备，如此一来可以使得容器能够直接使用`cuda`以及`gpu`。你也可以使用`nvidia-docker run`命令来创建容器，这将会自动添加这些环境变量。
+其中：
+
+- `-e NVIDIA_DRIVER_CAPABILITIES=compute,utility` 和 `-e NVIDIA_VISIBLE_DEVICES=all` 是设置环境变量，分别表示驱动程序功能和可见设备，如此一来可以使得容器能够直接使用`cuda`以及`gpu`。你也可以使用`nvidia-docker run`命令来创建容器，这将会自动添加这些环境变量。
+- `-p 0.0.0.0:9595:22`表示将容器内部的端口`22`映射到主机的端口`9595`。你可以多次使用`-p`参数来添加映射别的端口。
+- `-v /home/puao:/data`表示将容器内部的目录`/data`挂载到主机的目录`/home/puao`。如此以来容器内部的`/data`目录将实现与`/home/puao`目录进行数据共享。
 
 ### 配置密码
 
