@@ -1,6 +1,6 @@
 ---
 layout: post
-title: orw(oepn-read-write)
+title: orw(open-read-write)
 category: system
 date: 2023-11-1 18:12:00
 ---
