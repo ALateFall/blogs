@@ -27,3 +27,11 @@ hexo init "your_website_dir"
 # 例如笔者已经在hexo目录下，则使用命令hexo init .
 ```
 
+现在，只需要在该目录下的`source/_posts`文件夹下放置好你的`markdown`文件即可。
+
+若对内容进行了修改，使用以下命令：
+
+```bash
+hexo clean && hexo generate
+# 清除以前生成的内容，并且生成新的内容
+```

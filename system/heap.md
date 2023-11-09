@@ -17,6 +17,10 @@ date: 2023-8-21 21:04:32
 - 同样的，在64位下，若申请一个大小为0x8的chunk，那么总共得到的chunk的大小为0x18，原因是会加上一个0x10的header。
 - `BUU`的`glibc`是`glibc2.23-0ubuntu11`
 
+## TODO
+
+- 总结一些`trick`，包括`chunk shrink`
+
 ## 泄露libc的方法汇总
 
 - 申请一个非常大的堆块时会使用`mmap`来申请内存，而这样申请来的内存和`libc`的偏移是固定的，因此可以泄露这样申请来的内存的地址来泄露`libc`
@@ -117,13 +121,11 @@ fi
 
 RPATH="$1"
 FILE_NAME="$2"
-ADDITION="$3"
+shift 2
+ADDITION="$@"
 DYNAMIC_LINKER="$RPATH/ld-linux-x86-64.so.2"
-if [ "$#" -eq 2 ]; then
-    gcc -Wl,-rpath="$RPATH",-dynamic-linker="$DYNAMIC_LINKER" -g ./"$FILE_NAME".c -o "$FILE_NAME"
-elif [ "$#" -eq 3 ]; then
-    gcc -Wl,-rpath="$RPATH",-dynamic-linker="$DYNAMIC_LINKER" "$ADDITION" -g ./"$FILE_NAME".c -o "$FILE_NAME"
-fi
+
+gcc $ADDITION -Wl,-rpath="$RPATH",-dynamic-linker="$DYNAMIC_LINKER" -g ./"$FILE_NAME".c -o "$FILE_NAME"
 ```
 
 笔者将其命名为`gcc_libc`，并将其置入`/usr/bin`目录下，即可使用该方式来快速使用指定版本`glibc`进行编译：
@@ -155,6 +157,8 @@ gcc_libc ~/Desktop/pwn/glibc-all-in-one/libs/2.23-0ubuntu11_amd64/ house_of_lore
 ```bash
 patchelf --set-interpreter ~/Desktop/pwn/glibc-all-in-one/libs/2.23-0ubuntu3_amd64/ld-2.23.so ./uunlink
 patchelf --set-rpath ~/Desktop/pwn/glibc-all-in-one/libs/2.23-0ubuntu3_amd64 ./uunlink
+# 若只是切换libc：
+patchelf --replace-needed libc.so.6 ./libc-2.31.so ./uunlink
 ```
 
 可以看到第二条命令是让它在文件夹里自动搜寻对应的版本，路径不要搞错了。
@@ -179,7 +183,7 @@ ldd ./uunlink
 
 下载到`ubuntu`然后解压即可。
 
-然后，可以通过[这里]([Code browser - Explore C++ code on the web](https://codebrowser.dev/))来搜寻对应的函数或者文件，或者也可以直接在这里查看，但为了调试，可以仅仅只是找到在哪里，如图：
+然后，可以通过[这里]([Code browshttps://codebrowser.dev/)来搜寻对应的函数或者文件，或者也可以直接在这里查看，但为了调试，可以仅仅只是找到在哪里，如图：
 
 ![image-20230108195407693](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202301081954192.png)
 
@@ -1023,6 +1027,20 @@ bck->fd = victim;
 
 值得注意的是，`tcache`指向的直接是用户地址，而不是之前`bin`指向的是`header`的地址。
 
+对于`tcache`，`glibc`会在第一次申请堆块的时候创建一个`tcache_perthread_struct`的数据结构，同样存放在堆上。它的定义如下所示：
+
+```C
+/* 每个线程都有一个这个数据结构，所以他才叫"perthread"。保持一个较小的整体大小是比较重要的。  */
+// TCACHE_MAX_BINS的大小默认为64
+typedef struct tcache_perthread_struct
+{
+  char counts[TCACHE_MAX_BINS];
+  tcache_entry *entries[TCACHE_MAX_BINS];
+} tcache_perthread_struct;
+// 在glibc2.26-glibc2.29中，counts的大小为1个字节，因此tcache_perthread_struct的大小为1*64 + 8*64 = 0x250(with header)
+// 在glibc2.30及以上版本中，counts的大小为2个字节，因此tcache_perthread_struct的大小为2*64 + 8*64 = 0x290(with header)
+```
+
 ### tcache poisoning
 
 若存在`tcache`机制时，若申请一个属于`tcache`中的`chunk`，使用到的函数是`tcache_get()`函数，该函数在初始版本没有任何的安全机制，因此只需要简单地将某个`tcache`中的`chunk`的`fd`指针修改为想要分配到的地方，即可在目标地址申请一个`chunk`。
@@ -1052,6 +1070,34 @@ bck->fd = victim;
 - 修改`small bin`中的末尾的`chunk`的`bk`指针，使其指向要申请的`fake chunk`。
 - 使用`calloc`申请一个`chunk`，此时被修改过的`chunk`将会被挂入`tcache`。而由于该`chunk`的`bk`指针被修改，那么操作系统会误认为该`fake chunk`也在`small bin`中，此时也会被挂入`tcache`中。
 - 由于`tcache`是`LIFO`，只要直接申请就可以获得该`fake chunk`。
+
+### tcache_perthread_struct hijacking
+
+上面我们提到了`tcache_perthread_struct`数据结构的形式为：
+
+```c
+/* 每个线程都有一个这个数据结构，所以他才叫"perthread"。  */
+// TCACHE_MAX_BINS的大小默认为64
+typedef struct tcache_perthread_struct
+{
+  char counts[TCACHE_MAX_BINS];
+  tcache_entry *entries[TCACHE_MAX_BINS];
+} tcache_perthread_struct;
+// 在glibc2.26-glibc2.29中，counts的大小为1个字节，因此tcache_perthread_struct的大小为1*64 + 8*64 = 0x250(with header)
+// 在glibc2.30及以上版本中，counts的大小为2个字节，因此tcache_perthread_struct的大小为2*64 + 8*64 = 0x290(with header)
+```
+
+在程序初始化堆的时候，会创建一个对应大小的`tcache_perthread_struct`。其中：
+
+- `counts`数组存放了每一个大小的`chunk`目前存放了多少个。
+- `entries`是一个链表，它里面存放的值是在下一次申请这个大小的`tcache chunk`的时候，应该分配哪个位置的`chunk`。
+
+要注意，`counts`和`entries`的对应关系是按顺序来的，例如前`0x40`个字节中，第`0`个字节指示大小为`0x20`的`tcache chunk`的已分配数量，第`1`个字节指示大小为`0x30`的`tcache chunk`的已分配数量。又例如，`0x40`字节处的`8`字节表示下一个要分配的`0x20`大小的`tcache chunk`要分配的地址。
+
+若我们能够控制`tcache_pertrhead_struct`，则这两个值都可以被篡改。效果分别为：
+
+- 若我们控制了`counts`，对指定地方大小的`count`设置为7，则再次分配该大小的`chunk`时，就不会分配到`tcache`中。例如可以分配一个`unsorted chunk`来泄露`libc`。
+- 若我们控制了`entries`，相当于实现了任意大小的`chunk`的`tcache poisoning`，即可以在任意地址分配`chunk`，威力巨大。
 
 ## house of enherjar
 
@@ -1321,7 +1367,7 @@ int main()
 
 此外[这里](http://lliurex.net/xenial/pool/main/g/glibc/)也可以找到更多的版本。
 
-进入对应的版本，我先是找到了对应的`deb`包（看着像的），然后直接解压，再解压，拿到一堆libs然后兴冲冲地拿去patchelf了
+进入对应的版本，我先是找到了对应的`deb`包（看着像的），然后直接解压，再解压，拿到一堆libs然后兴冲冲地拿去patchelf了。（后面补充：例如我下的`glibc2.27`的`1.4`版本是`libc6 2.27-3ubuntu1.4`和`libc6-dbg 2.27-3ubuntu1.4`版本）
 
 发现运行起来是没问题的，但是在`gdb`调试的时候会提示没有`debug symbol`。这个时候看了看`glibc-all-in-one`的`download`脚本
 

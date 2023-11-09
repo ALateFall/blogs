@@ -319,7 +319,7 @@ source ~/.bashrc
 ssh-keygen # 可以生成ssh公私钥
 ```
 
-输入后会提示生成文件的路径，选择，通过该路径（一般是`C:/Users/用户名/.ssh`下）找到刚刚生成的`id_rsa.pub`文件，复制里面的内容，并粘贴到目标主机的`~/.ssh/authorized_keys`文件夹内即可完成。
+输入后会提示生成文件的路径，选择，通过该路径（一般是`C:/Users/用户名/.ssh`下）找到刚刚生成的`id_rsa.pub`文件，复制里面的内容，并粘贴到目标主机的`~/.ssh/authorized_keys`文件内即可完成。
 
 - 更换`pip`镜像源
 
