@@ -8,7 +8,6 @@ date: 2023-8-21 20:55:29
 <!-- more -->
 [toc]
 
-# Understanding glibc malloc 详解
 
 [原文链接](https://sploitfun.wordpress.com/2015/02/10/understanding-glibc-malloc/comment-page-1/)
 
@@ -25,15 +24,15 @@ date: 2023-8-21 20:55:29
 
 本文将只对`glibc malloc`进行讲解，其他的内存管理方式将留到以后进行讲解。让我们开始吧！（本文讲解的内存管理方式基于[此处](https://sourceware.org/legacy-ml/libc-alpha/2014-09/msg00088.html)）
 
-## 发展历史
+# 发展历史
 
 实际上，`ptmalloc2`是由`dlmalloc`的源代码`fork`而来的，并在`dlmalloc`的基础上添加了线程的支持，最终2006年发布。这之后，`ptmalloc2`这一内存管理方式被集成到了`glibc`中，这之后`glibc`开始自己对`malloc`内存管理方式进行修改。因此，目前`ptmalloc2`内存管理方式和`glibc`的`malloc`实现已经有着不小的差距了。
 
-## 系统调用
+# 系统调用
 
 [如此所示](https://sploitfun.wordpress.com/2015/02/11/syscalls-used-by-malloc/)，`malloc`内部有两种系统调用，即`brk`和`mmap`。
 
-## 线程
+# 线程
 
 在`linux`的早期版本，`dlmalloc`才是其默认的内存管理方式，但由于`ptmalloc2`添加的线程支持，这之后`ptmalloc2`才成为了`linux`的默认内存管理方式。线程能够改善内存分配的性能，也就是说，线程的支持能够改善应用程序的性能。在`dlmalloc`中，当两个线程同时调用`malloc`的时候，只有一个线程能够进入临界区修改数据，但这个时候操作系统中的空闲内存又是所有线程共享的。因此，内存分配问题在多线程的应用程序中占用了大量时间，造成程序的应用性能下降。在`ptmalloc2`中，当两个线程同时调用`malloc`的时候，内存将可以被立即分配，因为每个线程都维护了一个独立的`heap`，这些`heap`的空闲内存也是独立的。这个用于为每个线程维护独立的`heap`和空闲内存的东西就叫做线程`arena`。在`ptmalloc2`中，这个“空闲内存”也就是`bin`。
 
@@ -228,9 +227,9 @@ b7605000-b7e07000 rw-p 00000000 00:00 0          [stack:6594]
 sploitfun@sploitfun-VirtualBox:~/ptmalloc.ppt/mthread$
 ```
 
-## Areana
+# Areana
 
-### Arena的数量
+## Arena的数量
 
 在上面的例子中，主线程包含了一个主`arena`，而`thread1`包含了一个`thread arena`。那么是否一个线程一定和一个`arena`一一对应呢？答案是否定的。举个例子，一个程序可以有非常多的线程，甚至多于操作系统拥有的`cpu`的核心数量，那么这种情况下给每个线程都分配一个`arena`非常浪费。因此，一个应用程序的子线程`arena`的数量限制与系统中的`cpu`核心数相关，如下所示：
 
@@ -243,7 +242,7 @@ arena数目 = 8 * cpu核心数
 
 注意，主线程一定有自己的`main arena`，因此总的`arena`数量要在此基础上`+1`
 
-### Arena调度策略
+## Arena调度策略
 
 上面我们讲述了`arena`的数量限制。那么，一个很自然的问题就出现了：对于没有分配到`arena`的线程，如何进行内存管理呢？这就要引出`arena`的调度策略了。
 
@@ -258,7 +257,7 @@ arena数目 = 8 * cpu核心数
   - 若没有找到可用的`arena`，那么`thread3`将会被阻塞，直到有一个可用的`arena`为止。
 - 在`thread3`第二次调用`malloc`1的时候，`thread3`将会尝试使用最后一次使用的`arena`。假设上一次`thread3`使用了`main arena`，那么`thread3`将会尝试使用`main arena`。若`main arena`此时可用，那么`thread3`将会直接尝试使用`main arena`。若`main arena`此时不可用，那么`thread3`将会被阻塞，直到`main arena`可用为止。如此一来，`main arena`就在主线程和`thread3`之间实现了共享。
 
-### heap
+## heap
 
 在`glibc`的源代码中，主要有以下三种数据结构：
 
@@ -292,7 +291,7 @@ malloc_chunk
 
 ![image-20230710100313034](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202307101003078.png)
 
-### chunk
+## chunk
 
 `chunk`是进行内存管理的基本单元，`heap`中的`chunk`可能有如下形式：
 
@@ -331,7 +330,7 @@ malloc_chunk
 
 `bk`：后向指针，指向同一个`bin`中的上一个`chunk`。同上，不一定指向物理内存相连的下一个`chunk`。
 
-### bins
+## bins
 
 `bins`是维护被`free`掉的`chunk`的数据结构。基于`chunk`大小的不同，`bins`可以被分为如下形式：
 
@@ -350,7 +349,7 @@ malloc_chunk
 - `Bin 2 - Bin 63` - `Small bin`
 - `Bin 64 - Bin 126` - `Large bin`
 
-### Fast bin
+## Fast bin
 
 - 一共有`10`个`fastbin`。每一个`fastbin`都是单链表，因为`fastbin`的`chunk`的存取操作都不会发生在链表的中间。由于`fastbin`是为了时间局部性原则，因此是后进先出（`LIFO`），存取操作都发生在链表头。
 - 在一个单链表内，`chunk`的大小都是相同的。不同的单链表之间的大小差是根据系统的位数决定的，在`32位`下，差为`8`，在`64位`下的差则为`16`。例如在`32`位下，`fastbin0`的大小为`16bytes`，那么`fastbin1`的大小为`24bytes`。
@@ -361,7 +360,7 @@ malloc_chunk
 
 ![image-20230716232409024](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/image-20230716232409024.png)
 
-### Unsorted bin
+## Unsorted bin
 
 当大小属于`small bin`或者`large bin`的`chunk`被释放的时候，`chunk`也不会直接添加到对应的`bin`里面去，而是先被添加到`unsorted bin`，类似于`fast bin`，这样有利于时间局部性，因此略微加快了内存分配的速度，因为没有寻找合适的`bin`这个过程的时间。
 
@@ -370,7 +369,7 @@ malloc_chunk
 
 ![image-20230716232356352](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/image-20230716232356352.png)
 
-### Small bin
+## Small bin
 
 低于`512bytes(0x200)`的`chunk`被称为`small chunk`。`small bin`的分配速度比`large bin`略快，但是比`fastbin`更慢。
 
@@ -380,7 +379,7 @@ malloc_chunk
 - `malloc`时：初始状态下`small bin`都为空，因此用户即使访问了一个属于`small bin`的`chunk`也是由`unsorted bin`来处理。在第一次调用`malloc`时，`small bin`和`large bin`都将被初始化，并且它们的`bin`都会指向自身，表示它们是空的。若`small bin`不为空，那么会取出对应`small bin`中的最后一个`chunk`给用户。
 - `free`时：会检查相邻的上一个或者下一个`chunk`是否是`free`的，如果是，那么则会发生合并，并且将合并后的`chunk`添加到`unsorted bin`中。
 
-### Large bin
+## Large bin
 
 大于或等于`512bytes(0x200)`的`chunk`被称为`large chunk`，管理空闲的`large chunk`的数据结构叫做`Large bin`。
 
@@ -410,7 +409,7 @@ malloc_chunk
 
 - `free`操作：和`small bin`相同。
 
-### Top Chunk
+## Top Chunk
 
 `Top Chunk`是在一个`arena`的顶端部分的`chunk`，它不属于任意的`bin`。`Top chunk`的作用是在所有`bin`中都没有空闲的`chunk`时来处理用户的`malloc`请求。
 
@@ -421,7 +420,7 @@ malloc_chunk
 
 若`top chunk`大小要小于用户请求大小，那么`top chunk`会通过`sbrk(main arena)`或者`mmap(thread arena)`的系统调用方式来进行扩展，取决于是`main arena`还是`thread arena`。
 
-### Last Remainder Chunk
+## Last Remainder Chunk
 
 `Last Remainder Chunk`是一个在`Unsorted bin`中的特殊`chunk`。它会有两个地方产生作用：
 

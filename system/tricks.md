@@ -6,29 +6,39 @@ date: 2023-10-10 12:36:16
 ---
 持续更新，pwn题中的一些tricks
 <!-- more -->
+
 [toc]
 
-# tricks
 
 以下内容都是做题的时候遇到的一些知识点，但是由于时间原因，不可能详细记录每道题的详细解法，因此将这些题目的`trick`进行一个简要的总结。
 
-## 存在格式化字符串漏洞，但是只能利用一次
+# exec 1>&0
+
+`stdin` 是`0`
+
+`stdout` 是`1`
+
+`stderr` 是`2`
+
+程序使用`close(1)`关闭了输出流，那么可以使用`exec 1>&0`将其重定向到`stdin`，因为这三个都是指向终端的，可以复用。
+
+# 存在格式化字符串漏洞，但是只能利用一次
 
 程序在结束的时候会遍历`fini_array`里面的函数进行执行，将其劫持为`main`函数将会重新执行一次`main`函数。
 
-## 存在栈溢出，但是只能覆盖返回地址，无法构建ROP链
+# 存在栈溢出，但是只能覆盖返回地址，无法构建ROP链
 
 栈迁移
 
-## off-by-one利用
+# off-by-one利用
 
 - 上一个`chunk`末尾为`0x8`这种类型，那么通过`off-by-one`可以任意修改下一个`chunk`的大小，将其改大，并将其释放，再申请，即可造成`chunk`的重叠，即被改大的这个`chunk`和它之后的`chunk`重叠，那么可以通过修改这个`chunk`来修改被重叠的`chunk`。同时也可以将重叠的`unsorted chunk`释放，打印被改大的`chunk`，即可泄露`libc`。
 
-## fastbin attack的0x7f
+# fastbin attack的0x7f
 
 很多时候`fastbin attack`为了绕开`memory corruption (fast)`，需要使用`malloc_hook`或者`free_hook`附近的`0x7f`来构造一个`fake chunk`。实际上，`size`为`0x7f`的`chunk`去掉`N M P`位，也就是`0x78`，由于最后`0x8`是在下一个`chunk`的`prev_size`字段，那么实际上`0x7f`的`chunk`是对应`size`为`0x70`的普通`chunk`，也就是通过`malloc(0x60)`得到的。
 
-## one_gadget环境变量修改
+# one_gadget环境变量修改
 
 `one_gadget`并不是直接就生效的，而是在一定条件下才生效，如下图所示，`constraints`部分就是必须满足的条件。
 
@@ -67,10 +77,10 @@ malloc => __malloc_hook => realloc => 一系列的push操作 => __realloc_hook =
 最后，记录一下`realloc`函数依次增加多少个偏移的字节可以减少一个`push`操作：
 
 ```tex
-2,4,6,12,13
+2,4,6,12,13,20
 ```
 
-## exit_hook
+# exit_hook
 
 实际上这并不是一个真正意义上的`hook`，因为它实际上是劫持了一个指针而已。
 
@@ -128,7 +138,7 @@ _dl_rtld_lock_recursive = _rtld_global + 0xf08
 _dl_rtld_unlock_recursive = _rtld_global + 0xf10
 ```
 
-## off by null制作三明治结构
+# off by null制作三明治结构
 
 `off-by-null`，本部分是在做西南赛区国赛2019年的`pwn2`总结的，该题目环境是`ubuntu18, glibc2.27`。
 
@@ -142,10 +152,10 @@ _dl_rtld_unlock_recursive = _rtld_global + 0xf10
 
 此时释放`chunk2`，会将三个`chunk`合并成一个并置入`unsortedbin`。切割下来`chunk0`，打印`chunk1`即可泄露`libc`地址（`chunk1`虽然合并在里面，但是它并没有被释放）。再次切割`chunk1`下来，就有两个指向`chunk1`的指针了。
 
-## glibc2.23下通过劫持vtable来getshell
+# glibc2.23下通过劫持vtable来getshell
 
 程序调用`exit`时，会遍历`_IO_list_all`，并调用`_IO_2_1_stdout_`下的`vtable`中的`setbuf`函数。而在`glibc2.23`下是没有`vtable`的检测的，因此可以把假的`stdout`的虚表构造到`stderr_vtable-0x58`上，由此`stdout`的虚表的偏移`0x58(setbuf的偏移)`就是`stderr`的虚表位置。
 
-## 通过largebin泄露堆地址
+# 通过largebin泄露堆地址
 
 总是忘了在`largebin`中只有一个`chunk`的时候它的`fd_nextsize`和`bk_nextsize`会指向自身。特此记录，可以通过`largebin`的`bk_nextsize`和`fd_nextsize`来泄露堆地址。

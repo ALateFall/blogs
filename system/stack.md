@@ -8,7 +8,7 @@ date: 2023-8-21 21:02:28
 <!-- more -->
 [toc]
 
-## checksec总结
+# checksec总结
 
 - RELRO：当`RELRO`保护为`NO RELRO`的时候，`init.array、fini.array、got.plt`均可读可写；为`PARTIAL RELRO`的时候，`ini.array、fini.array`可读不可写，`got.plt`可读可写；为`FULL RELRO`时，`init.array、fini.array、got.plt`均可读不可写。
 
@@ -49,7 +49,7 @@ PIE：-no-pie / -pie (关闭 / 开启)
 RELRO：-z norelro / -z lazy / -z now (关闭 / 部分开启 / 完全开启)
 ```
 
-## ASLR和PIE的关系
+# ASLR和PIE的关系
 
 `PIE`机制是程序本身的安全机制，而`ASLR`是操作系统的安全机制。
 
@@ -64,7 +64,7 @@ RELRO：-z norelro / -z lazy / -z now (关闭 / 部分开启 / 完全开启)
 
 若关闭了`ASLR`，那么堆地址/栈地址/共享库地址一定是固定的。
 
-## 短shellcode
+# 短shellcode
 
 ```
 # 64位
@@ -72,7 +72,7 @@ b'\x6a\x3b\x58\x99\x52\x48\xbb\x2f\x2f\x62\x69\x6e\x2f\x73\x68\x53\x54\x5f\x52\x
 b'\x31\xf6\x48\xbb\x2f\x62\x69\x6e\x2f\x2f\x73\x68\x56\x53\x54\x5f\x6a\x3b\x58\x31\xd2\x0f\x05'
 ```
 
-## 栈溢出-确定填充长度
+# 栈溢出-确定填充长度
 
 这一部分主要是计算**我们所要操作的地址与我们所要覆盖的地址的距离**。常见的操作方法就是打开 IDA，根据其给定的地址计算偏移。一般变量会有以下几种索引模式
 
@@ -100,7 +100,7 @@ b'\x31\xf6\x48\xbb\x2f\x62\x69\x6e\x2f\x2f\x73\x68\x56\x53\x54\x5f\x6a\x3b\x58\x
 - x64
   - System V AMD64 ABI (Linux、FreeBSD、macOS 等采用) 中前六个整型或指针参数依次保存在 **RDI, RSI, RDX, RCX, R8 和 R9 寄存器**中，如果还有更多的参数的话才会保存在栈上。
 
-## pwntools使用
+# pwntools使用
 
 可以对本地程序或者远程程序使用`pwntools`来进行数据的传输，寻找等等操作。
 
@@ -171,7 +171,7 @@ print(pid)
 # gdb.attach(pid)
 ```
 
-## 调试操作
+# 调试操作
 
 使用`gdb`调试文件：
 
@@ -245,7 +245,7 @@ disassemble main
 attach [pid]
 ```
 
-## ida操作
+# ida操作
 
 伪代码和汇编切换 `F5`
 
@@ -269,7 +269,7 @@ attach [pid]
 
 转换数据类型（db、dw等） `d`
 
-## ret2system
+# ret2system
 
 若反汇编出得来的文件中既含有`system()`函数，也含有`/bin/sh`这个参数，那可以直接将返回的地址处的栈构造成这种方式：（此处我们压入栈里面的是`_system()`函数的地址，因此需要函数的返回地址）
 
@@ -285,7 +285,7 @@ attach [pid]
 
 |     &(call _system)     |
 
-## ret2shellcode
+# ret2shellcode
 
 个人感觉是必须有可读部分，且NX保护不能开。（开了还执行个der的shellcode
 
@@ -303,7 +303,7 @@ sh.sendline(shellcode.ljust(112, 'A') + p32(buf2_addr))
 sh.interactive()
 ```
 
-## ret2syscall
+# ret2syscall
 
 思路大概是：使用`ROPgadget`寻找到含有修改寄存器并`ret`的寄存器操作。（要`ret`是因为需要执行多个这样的操作）。然后找到多个这样的操作来覆盖`return address`，通过这些修改寄存器的操作来进行`syscall`。
 
@@ -338,7 +338,7 @@ sh.interactive()
 - `execve`的系统调用号为`59`
 - 不再使用`int 80`来发起系统调用，而是`syscall`指令。
 
-## ROPgadgets操作
+# ROPgadgets操作
 
 找`pop ebx`操作：
 
@@ -358,9 +358,9 @@ ROPgadget --binary file --string '/bin/sh'
 ROPgadget --binary file --only 'int'
 ```
 
-## ret2libc
+# ret2libc
 
-### plt、got、以及延迟绑定机制
+## plt、got、以及延迟绑定机制
 
 首先写一下`plt`和`got`表，以及他们的延迟绑定机制。
 
@@ -418,7 +418,7 @@ Disassembly of section .plt:
 
 `call xxx@plt`->`plt`->`got`
 
-### ret2libc流程
+## ret2libc流程
 
 为什么要`ret2libc`？因为有的情况下，程序里面不会给我们提供一些显式的字符串，也没有可以利用的`gadgets`。但我们的程序需要使用库函数，是要连接`libc`库里面的，我们便可以利用`libc`库中的其他函数，只是需要知道函数在`libc`中的地址。虽然这个地址肯定是会变的，但是函数与函数间的相对地址不会变；或者说即使程序有ASLR保护，也只针对地址中间位进行随机，最低12位不会发生变化。因此我们只需要获得某一个函数在`libc`中的地址，就可以通过相对地址来获得其他的函数。
 
@@ -510,7 +510,7 @@ bin_sh_libc = libcbase + next(libc.search(b'/bin/sh'))
 
 **也可以使用`libc`里面的`gadgets`。**
 
-## ret2csu
+# ret2csu
 
 我们知道32位程序可以通过栈传递参数，但64位程序是用寄存器传递参数的，因此在`ret2libc`的时候需要有特定的`gadgets`来给寄存器赋值。有的情况下是没有这样的`gadgets`的，因此需要我们另辟蹊径，获得这样的`gadgets`。
 
@@ -679,7 +679,7 @@ csu(0, 1, bss_base, 0, 0, bss_base + 8, main_addr)
 sh.interactive()
 ```
 
-### 改进
+## 改进
 
 用此处的通用gadgets，输入的字节长度较长，有的情况下不允许有这样长的payload。因此：
 
@@ -695,7 +695,7 @@ sh.interactive()
 
 
 
-### 其他的可能可用的gadgets
+## 其他的可能可用的gadgets
 
 ```
 _init
@@ -768,7 +768,7 @@ retn
 
 
 
-## BROP
+# BROP
 
 `Blind-ROP`，也就是盲打！其实是没有源程序的情况下的一种攻击思路。
 
@@ -779,13 +779,13 @@ retn
 - Blind ROP: 找到合适的`gadgets`，并用来控制输出函数（`puts(),write()`）的参数。
 - 使用输出函数找到更多的`gadgets`以便于编写`exp`。
 
-### 判断栈溢出长度
+## 判断栈溢出长度
 
 最简单的一步，从1开始暴力枚举，直到发现程序崩溃。
 
 这里提一嘴，假如发现使得程序溢出的字节数不是64位的倍数，考虑是不是读入了一个回车。
 
-### Stack Reading
+## Stack Reading
 
 经典栈布局：
 
@@ -806,7 +806,7 @@ low address->                            ->high address
 
 其实也就是按字节爆破，和直接爆破的区别就是，以64位程序为例子，按字节爆破只需要 $8*2^{8} = 2048$ 次，因为我们是能够判断前面的字节是否匹配成功的。32位只需要 $4*2^{8}=1024$ 次。
 
-### Blind ROP
+## Blind ROP
 
 首先我们需要利用一些关键`gadgets`，这里我们称为`BROP gadgets`，也就是之前在`libc_csu_init`里面结尾处的`gadgets`。为什么？因为这里能有控制两个关键的传参的寄存器`rdi`和`rsi`的`gadgets`。（怎么取到`rdi`和`rsi`在`ret2csu`那一节）。
 
@@ -957,7 +957,7 @@ if __name__ == '__main__':
 
 可以看到，`puts_got`的地址是`0x601018`。这个是没问题的，但`push`那个地址本来应该是`0`，但不知道怎么变成了`0A0A00`，有两个`0`变成`a`了，这个希望有师傅解答一下。
 
-### exp
+## exp
 
 跟着`wiki`一步一步写的，最后也是有点乱
 
@@ -1197,7 +1197,7 @@ if __name__ == '__main__':
     sh.interactive()
 ```
 
-## mprotect && mmap
+# mprotect && mmap
 
 首先是`mprotect`。
 
@@ -1236,7 +1236,7 @@ void* mmap(void* start, size_t length, int prot, int flags, int fd, off_t offset
 // 函数将一个文件映射到内存区域的一片空间，内存空间和文件二者被修改了都会改变另一个，但不是立即更新。显式同步可以使用msync()。进程不需要read()或者write()便可以对文件进行修改。mmap没有分配空间，而是将文件映射到内存，要映射的长度在调用mmap()时就已经决定，无法增加长度。
 ```
 
-## 栈转移
+# 栈转移
 
 有的情况下，栈溢出的空间很小，可能仅仅覆盖到`ebp`和`return address`，甚至没有办法构造参数，因此可以把栈迁移到其他地方。栈迁移其实主要是把`esp`放到想要放到的位置，因为像`pop`指令这种都是在栈顶也就是`esp`指向的地方操作的。栈一般可以迁移到例如`bss`段，或者是`read`进来存放到栈上的`payload`等（当然要知道存放的地址）。
 
@@ -1280,7 +1280,7 @@ ebp2|target function addr|leave ret addr|arg1|arg2
 
 
 
-## 一些栈结构的含义
+# 一些栈结构的含义
 
 - 若含有`gets`这种函数，在32位程序下可以用如下方式构造一个`/bin/sh`：
 
@@ -1314,7 +1314,7 @@ ebp2|target function addr|leave ret addr|arg1|arg2
 
 同样的，对于栈溢出后执行的`gets()`函数，`pop_ebx`这个gadgets是`gets()`的返回地址，`buf2`是`gets()`函数的参数。在`gets()`函数执行完毕后，便会执行`pop_ebx`这个gadgets，因此便将`buf2`从栈里pop了出去，并继续执行栈顶，便是`system()`函数。
 
-## 直接call输入的内容
+# 直接call输入的内容
 
 做题的时候遇到的一个问题，先浅浅记录一下。
 
@@ -1359,7 +1359,7 @@ int __cdecl main(int argc, const char **argv, const char **envp)
 
 相当于说是要把`rdx`处的地方当成一个函数来执行，在这个函数里面，我们理所当然的想到在`rdx`里面写`call givemeshell`，但是尝试之后发现是不行的，这里最终是使用了`jmp givemeshell`来跳转到了后门函数。这里只需要注意，`jmp`和`call`大部分情况下是相对跳转，笔者这里是调试后得到的`givemeshell`函数地址的十六进制代码，而`jmp`的十六进制代码是`0xe9`，最终五个字节为`0xffffd148e9`（只是参考一下这个十六进制的形式）完成了跳转。
 
-## things
+# things
 
 - `gdb`调试的结果和直接而运行的结果不一样
 

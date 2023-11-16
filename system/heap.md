@@ -8,31 +8,30 @@ date: 2023-8-21 21:04:32
 <!-- more -->
 [toc]
 
-# heap
 
-## tips
+# tips
 
 - 在32位下，若申请一个大小为0x8的chunk，那么总共会得到的chunk的大小为0x10，原因是会加上一个0x8的header。
 - 一个`word`是2字节，那么`DWORD`是4字节，`QWORD`是8字节。
 - 同样的，在64位下，若申请一个大小为0x8的chunk，那么总共得到的chunk的大小为0x18，原因是会加上一个0x10的header。
 - `BUU`的`glibc`是`glibc2.23-0ubuntu11`
 
-## TODO
+# TODO
 
 - 总结一些`trick`，包括`chunk shrink`
 
-## 泄露libc的方法汇总
+# 泄露libc的方法汇总
 
 - 申请一个非常大的堆块时会使用`mmap`来申请内存，而这样申请来的内存和`libc`的偏移是固定的，因此可以泄露这样申请来的内存的地址来泄露`libc`
 - `unsorted bin leak`
 
-## 64位下各个bin的大小范围(with header)
+# 64位下各个bin的大小范围(with header)
 
 | fast bin      | small bin      | large bin                                                    |
 | ------------- | -------------- | ------------------------------------------------------------ |
 | `0x20`-`0x80` | `0x90`-`0x3f0` | 第一个`largebin`：`0x400`-`0x430`<br />第二个`largebin`：`0x440`-`0x470`<br />第三个`largebin`：`0x480`-`0x4b0`<br />第四个`largebin`：`0x4c0`-`0x4f0`<br />... |
 
-## 各个bin的使用&释放顺序
+# 各个bin的使用&释放顺序
 
 | fast bin                                               | small bin                                                    |
 | ------------------------------------------------------ | ------------------------------------------------------------ |
@@ -42,7 +41,7 @@ date: 2023-8-21 21:04:32
 | -------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------ |
 | 释放时添加到链表头<br />取出时从链表尾部取出<br />`FIFO` | 从`unsortedbin`挂入时，按照大小顺序放入对应位置<br />取出同样按照大小顺序 | 释放时添加到链表头<br />取出时从链表头取出<br />`FILO` |
 
-## pwndbg命令
+# pwndbg命令
 
 ```bash
 parseheap # 可以查看当前的所有chunk，以及chunk的地址、prev大小、size、status和fd等等。
@@ -76,7 +75,7 @@ find_fake_fast 可以通过偏移等方式寻找一个fake_chunk，主要用于d
 如 find_fake_fast &__malloc_hook
 ```
 
-## one_gadget使用
+# one_gadget使用
 
 作用：
 
@@ -96,7 +95,7 @@ gem install one_gadget
 one_gadget ./libc.so.6 # 得到的是基于libc_base的gadget地址
 ```
 
-## gcc使用指定版本glibc编译
+# gcc使用指定版本glibc编译
 
 首先要`glibc-all-in-one`不必多说
 
@@ -136,7 +135,7 @@ gcc_libc ~/Desktop/pwn/glibc-all-in-one/libs/2.23-0ubuntu11_amd64/ house_of_lore
 
 这里的`ld-linux-x86-64.so.2`是一个符号链接，它指向当前文件夹内部的`ld-2.xx.so`，这样可以不受版本影响文件名。
 
-## 使用patchelf
+# 使用patchelf
 
 有的题目需要更改`libc`版本，因此需要使用`patchelf`。
 
@@ -171,7 +170,7 @@ ldd ./uunlink
 
 ![image-20230108175223269](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202301081752097.png)
 
-## glibc源码
+# glibc源码
 
 我是在[这里](https://launchpad.net/ubuntu/+source/glibc/)找的，找到对应版本，比如我这里是想看看`2.23-0ubuntu3`的，就下了这个：
 
@@ -189,7 +188,7 @@ ldd ./uunlink
 
 打开之后，发现是在`glibc/malloc/malloc.c`里面。开始`read the fucking code`吧。
 
-## unsafe unlink
+# unsafe unlink
 
 一句话，`unsafe unlink`漏洞是：控制相邻两个`chunk`的`prev size`和`prev_inuse`和`fd bk`等字段的值，以及攻击者明确存放这些`chunk`的地址的指针时，使得程序对不正确的位置进行`unlink`，从而达到任意地址写的目的。
 
@@ -350,7 +349,7 @@ P = &P - 0x18;
 
 在可以利用的情况下，用户是可以对自己malloc的chunk进行修改的。因此对prev chunk进行修改，直接会变为修改存放这些chunk的数组/指针的值，我们便可以使其指向任意地址，并完成任意地址写。
 
-### 例题uunlink
+## 例题uunlink
 
 exp:
 
@@ -442,7 +441,7 @@ p.interactive()
 
 
 
-## use after free (UAF)
+# use after free (UAF)
 
 顾名思义，`use after free`是对已经被`free`的内容进行读写的操作。若用户在对指针进行`free`操作后没有将其置空，则该指针可能仍然可以被使用。（根据测试，`glibc2.23`中仍然可以使用，但在最新版本中对`free`后的指针使用会报错，具体修复版本待测试）
 
@@ -638,7 +637,7 @@ print_note(0)
 sh.interactive()
 ```
 
-## fastbin attack
+# fastbin attack
 
 首先要知道`fastbin`的`chunk`的大小范围。
 
@@ -748,7 +747,7 @@ allocate(0x10)
 sh.interactive()
 ```
 
-### Double Free
+## Double Free
 
 顾名思义，也就是将一个已经在`fastbins`里面的`chunk`再次添加到`fastbins`里面去，添加完成后就会有两个同样的`chunk`在一个`bins`里面。
 
@@ -833,11 +832,11 @@ sh.sendline('4')
 sh.interactive()
 ```
 
-## unsortedbin attack
+# unsortedbin attack
 
 广义上的`unsorted bin attack`其实分为`unsorted bin leak`和`unsorted bin attack`，前者可以根据`unsorted bin`的特性来泄露出`libc`的地址，后者的作用是对一个指定地址写入一个非常大的值（其实是写入`main_arena`的地址的一个偏移）。
 
-### unsortedbin特性
+## unsortedbin特性
 
 首先是`unsorted bin`的来源，这里抄一下`wiki`
 
@@ -858,11 +857,11 @@ sh.interactive()
 
 ![img](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/876323_83TKRFDZJ5XP3GC.jpg)
 
-### unsortedbin leak
+## unsortedbin leak
 
 从上图也可以看到，与`unsorted bin`直接相连的一个`bin`是最后插入到`unsorted bin`里面来的。它的`bk`指针指向`unsorted bin`。换句话说，它的`bk`指针指向`main_arena`的一个固定偏移，而`main_arena`和`libc_base`也有一个固定偏移，那么只要泄露出来了它的`bk`指针，也就不愁计算出`libc`的地址了。这里用先插入到`unsorted bin`的`fd`指针也是同理的。
 
-### unsortedbin attack
+## unsortedbin attack
 
 作用是向指定地址写入一个非常大的值，即`main_arena`的一个固定偏移。
 
@@ -916,9 +915,9 @@ bck->fd = unsorted_chunks (av);
 
 至此，已经实现了攻击。
 
-## largebin attack
+# largebin attack
 
-### largebin结构示意图
+## largebin结构示意图
 
 网上的教程害人不浅，例如笔者曾经阅读过一些文章后得出下面的示意图，实际上是错误的。
 
@@ -934,7 +933,7 @@ bck->fd = unsorted_chunks (av);
 
 ![image-20230731190106590](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202307311901815.png)
 
-### largebin attack（glibc 2.23）
+## largebin attack（glibc 2.23）
 
 首先让我们明确攻击需要的条件、出现的位置，和其正常情况下本来的目的。
 
@@ -1013,11 +1012,11 @@ bck->fd = victim;
 
 同样的，这会将`value1`修改为`victim`，此处不再赘述。
 
-## tcache attack
+# tcache attack
 
 先略记录一下，以后可能会回来补充细节。
 
-### 什么事tcache
+## 什么事tcache
 
 这是`glibc 2.26`以后引入的一种为了加快内存分配速度的机制，但同时也产生了很多安全漏洞。由于`ubuntu18.04`已经开始使用`glibc 2.27`，因此`ubuntu 18.04`版本存在`tcache`机制的使用。由于`tcache`机制也逐渐进行了诸多更新，修复了部分漏洞，本文暂时站在`tcache`最初始的版本进行讲解。
 
@@ -1041,21 +1040,21 @@ typedef struct tcache_perthread_struct
 // 在glibc2.30及以上版本中，counts的大小为2个字节，因此tcache_perthread_struct的大小为2*64 + 8*64 = 0x290(with header)
 ```
 
-### tcache poisoning
+## tcache poisoning
 
 若存在`tcache`机制时，若申请一个属于`tcache`中的`chunk`，使用到的函数是`tcache_get()`函数，该函数在初始版本没有任何的安全机制，因此只需要简单地将某个`tcache`中的`chunk`的`fd`指针修改为想要分配到的地方，即可在目标地址申请一个`chunk`。
 
-### tcache double free
+## tcache double free
 
 若没有`tcache`的时候，`double free`不能简单地连续对一个`chunk`进行`free`两次这个机制略显复杂的话，那么`tcache double free`就显得单纯许多了。在初始版本下`tcache`的释放操作是使用的`tcache_get()`函数，该函数同样没有任何安全机制，因此可以简单地直接对一个`chunk`进行两次`free`，因此可以申请回该`chunk`，对其修改后再次申请，完成任意地址写/任意地址`chunk`分配的目的。
 
 要注意的是，`glibc`在后来的版本中，在`tcache`的数据结构中添加了`key`，会一定程度上防止`double free`的发生。这个后面再补。
 
-### tcache house of spirit
+## tcache house of spirit
 
 与`fastbin`的`house of spirit`是相当类似的，不同的是，`tcache`的`house of spirit`更加简单，可以直接在任意地方伪造一个`chunk`然后进行`free`。`fast bin`的`house of spirit`还需要控制要`free`的下一个`chunk`的`size`域。
 
-### tcache stashing unlink attack
+## tcache stashing unlink attack
 
 这个可以完成任意地址的`chunk`申请。
 
@@ -1071,7 +1070,7 @@ typedef struct tcache_perthread_struct
 - 使用`calloc`申请一个`chunk`，此时被修改过的`chunk`将会被挂入`tcache`。而由于该`chunk`的`bk`指针被修改，那么操作系统会误认为该`fake chunk`也在`small bin`中，此时也会被挂入`tcache`中。
 - 由于`tcache`是`LIFO`，只要直接申请就可以获得该`fake chunk`。
 
-### tcache_perthread_struct hijacking
+## tcache_perthread_struct hijacking
 
 上面我们提到了`tcache_perthread_struct`数据结构的形式为：
 
@@ -1099,7 +1098,7 @@ typedef struct tcache_perthread_struct
 - 若我们控制了`counts`，对指定地方大小的`count`设置为7，则再次分配该大小的`chunk`时，就不会分配到`tcache`中。例如可以分配一个`unsorted chunk`来泄露`libc`。
 - 若我们控制了`entries`，相当于实现了任意大小的`chunk`的`tcache poisoning`，即可以在任意地址分配`chunk`，威力巨大。
 
-## house of enherjar
+# house of enherjar
 
 一句话描述该漏洞：在任意地方伪造一个`fake_chunk`，然后通过控制紧邻`top chunk`的`chunk`的`prev_size`和`prev_inuse`位，导致当该`chunk`被释放时会根据`prev_size`直接合并到`fake_chunk`，而由于该`chunk`本身和`top chunk`相连，那么该`fake chunk`又会与`top chunk`合并，导致`top chunk`的指针从`fake chunk`开始，这样一来从`top chunk`申请内存时将申请到`fake chunk`处的内存。如图所示（该图来自于[hollk大佬的博客](https://blog.csdn.net/qq_41202237/article/details/117112930?ops_request_misc=%257B%2522request%255Fid%2522%253A%2522169149897016800180659893%2522%252C%2522scm%2522%253A%252220140713.130102334.pc%255Fblog.%2522%257D&request_id=169149897016800180659893&biz_id=0&utm_medium=distribute.pc_search_result.none-task-blog-2~blog~first_rank_ecpm_v1~rank_v31_ecpm-1-117112930-null-null.268^v1^koosearch&utm_term=house%20of%20force&spm=1018.2226.3001.4450)）：
 
@@ -1193,7 +1192,7 @@ int main()
 }
 ```
 
-## house of force
+# house of force
 
 一句话描述该漏洞，在`glibc 2.23`下，通过控制`top chunk`的`size`域为一个特别大的值，导致可以通过`malloc`特别大的值或者负数来将`top chunk`的指针指向任意位置。
 
@@ -1285,7 +1284,7 @@ int main()
 }
 ```
 
-## house of lore
+# house of lore
 
 `house of lore`是针对`small bin`的一种攻击方法，和`unsorted bin attack`与`large bin  attack`很类似。个人感觉称之为`small bin attack`也没啥问题。
 
@@ -1359,7 +1358,7 @@ int main()
 }
 ```
 
-### house of rabbit
+## house of rabbit
 
 `house of rabbit`是一种`fastbin`的攻击方法，可以在没有`leak`的情况下通过获得一个`overlap chunk`或者是一个`fake chunk`。这是利用了`malloc_consolidate`没有进行很好的安全校验来进行攻击的。
 
@@ -1370,7 +1369,7 @@ int main()
 
 上面我们提到两个条件是二选一即可，是因为两个条件可以发起不同的攻击。下面让我们详细理解。
 
-### 可以控制fd指针
+## 可以控制fd指针
 
 当可以控制`fd`指针的时候，师傅们很容易想到`fastbin attack`，然而`fastbin attack`在部分情况下存在局限性。
 
@@ -1378,13 +1377,13 @@ int main()
 
 ![image-20231114100530815](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202311141005871.png)
 
-### 可以控制chunksize
+## 可以控制chunksize
 
 当可以控制`chunksize`时，可以获得一个`chunk overlap`。具体过程如下：
 
 首先申请两个相同大小的`chunk`，例如`0x40`的两个`chunk`。释放后，我们将第一个`chunksize`更改为`0x80`，此时若触发`malloc_consolidate`，那么会分别将两个`chunk`添加到大小为`0x40`和`0x80`的`smallbin`中。那么当`size`被修改为`0x80`的`chunk`被添加到大小为`0x80`的`smallbin`中后，`chunk overlap`实际上就已经发生了。因为只需要申请大小为`0x80`的`chunk`就可以获得这个`chunk`了。
 
-## house of roman
+# house of roman
 
 这种攻击方式可以在完全没有`leak`的情况下，多次利用与`unsortedbin`相连的`chunk`的`fd`和`bk`指向`main_arena+88`，或者`unsortedbin attack`来得到`main_arena+88`，然后根据这个`main_arena+88`来覆盖低位，通过一种`partial overwrite`的方式来进行攻击。个人认为`house of roman`并不是像其他`house of xxx`系列一样有明确的攻击利用链，师傅们只需要能够理解利用其中多次利用`unsortedbin`的`main_arena+88`的`partial write`即可。此外，还需要师傅们理解如何通过`fastbin attack`获取`unsortedbin`的`main_arena+88`：利用单字节溢出修改`unsortedbin chunk`的`size`，然后打`fastbin attack`。
 
@@ -1515,7 +1514,7 @@ delete(index=5)
 sh.interactive()
 ```
 
-## 记一次下载glibc 2.23-0ubuntu11.2
+# 记一次下载glibc 2.23-0ubuntu11.2
 
 这个版本的`glibc`在`glibc-all-in-one`是没有的，但很多情况的ubuntu16实际上是这个`glibc`而不是现在用的`glibc2.23-0ubuntu11.3`。因此以备需要，这个还是需要有一份的。
 
@@ -1533,7 +1532,7 @@ sh.interactive()
 
 好吧 结果最后发现`BUU`用的应该是`glibc2.23-0ubuntu11`
 
-## malloc源码解读
+# malloc源码解读
 
 这里是`glibc 2.23-0ubuntu3`中的`./malloc/mallo.c`部分
 
@@ -2100,7 +2099,7 @@ _int_malloc(mstate av, size_t bytes)
 - 若`top chunk`仍然不满足，那么检查是不是有`fast bin chunk`存在，将其全部合并。尝试获取用户请求的大小是不是在`small bin`或者`large bin`范围内。
 - 还不行，只能让操作系统分配一块新的内存了。
 
-## free源码解读
+# free源码解读
 
 ```c
 static void
@@ -2423,7 +2422,7 @@ _int_free(mstate av, mchunkptr p, int have_lock)
 - 上面的步骤已经完成了合并操作，而且其不是`fastbin`，那么我们接下来需要将其置入`unsortedbin`中。首先进行安全检查，若`unsortedbin`中的第一个`chunk`的`bk`指针没有指向`unsortedbin`，那么报错。将要释放的`chunk`插入到`unsortedbin`头指针和本来的第一个`chunk`之间即可。若其是`large chunk`，那么还需要将`fd_nextsize`指针和`bk_nextsize`指针设为`NULL`。
 - 到这里`free`的过程就已经结束了。
 
-## unlink源码解读
+# unlink源码解读
 
 ```c
 #define unlink(AV, P, BK, FD)

