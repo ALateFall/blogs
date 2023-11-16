@@ -145,3 +145,7 @@ _dl_rtld_unlock_recursive = _rtld_global + 0xf10
 ## glibc2.23下通过劫持vtable来getshell
 
 程序调用`exit`时，会遍历`_IO_list_all`，并调用`_IO_2_1_stdout_`下的`vtable`中的`setbuf`函数。而在`glibc2.23`下是没有`vtable`的检测的，因此可以把假的`stdout`的虚表构造到`stderr_vtable-0x58`上，由此`stdout`的虚表的偏移`0x58(setbuf的偏移)`就是`stderr`的虚表位置。
+
+## 通过largebin泄露堆地址
+
+总是忘了在`largebin`中只有一个`chunk`的时候它的`fd_nextsize`和`bk_nextsize`会指向自身。特此记录，可以通过`largebin`的`bk_nextsize`和`fd_nextsize`来泄露堆地址。
