@@ -1,7 +1,7 @@
 ---
 layout: post
 title: 格式化字符串漏洞小结
-category: system
+category: system/format_string
 date: 2023-8-21 20:15:36
 ---
 本文总结了格式化字符串漏洞中的一些基础知识点。
