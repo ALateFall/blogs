@@ -1,7 +1,7 @@
 ---
 layout: post
 title: EANN复现笔记
-category: experiments(谣言检测)
+category: 科研类
 date: 2023-8-18
 ---
 本文记录作者在复现多模态谣言检测的经典论文EANN遇到的一些坑。
