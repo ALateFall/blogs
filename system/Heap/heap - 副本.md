@@ -1,11 +1,3 @@
----
-layout: post
-title: glibc漏洞利用-backup
-category: system/Heap
-date: 2023-9-23 21:04:32
----
-Heap基础知识
-<!-- more -->
 [toc]
 
 
