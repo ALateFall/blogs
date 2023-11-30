@@ -702,9 +702,19 @@ int main(){
 - `f -> _flags`为`0xfbad0800`，偏移为`0x0`
 - `f -> _fileno`为`1`，偏移为`0x70`
 - `f -> _IO_write_base`和 `f -> _IO_write_ptr`之间为输出的内容，其中`f -> _IO_write_base`的偏移为`0x20`，`f -> _IO_write_ptr`为`0x28`
-- `f -> _IO_write_end == f -> _IO_write_ptr`，其中`f -> _IO_write_end`偏移为`0x30`
 - `f -> _IO_read_end == f -> _IO_write_base`，其中`f -> _IO_read_end`偏移为`0x10`
-- 调用输出到文件的一些函数例如`fwrite`、`fputs`
+- `f -> _IO_write_end == f -> _IO_write_ptr`，其中`f -> _IO_write_end`偏移为`0x30`
+- 调用输出到文件的一些函数例如`fwrite`、`fputs`，或是`_fileno`本来就为`1`时任意调用`stdout`
+
+后记：
+
+发现如下方式也可以，更加简单，原理待补充：
+
+- `f -> _flags`为`0xfbad1887`，偏移为`0x0`
+
+- `f -> _fileno`为`1`，偏移为`0x70`
+
+- `f -> _IO_write_base`和 `f -> _IO_write_ptr`之间为输出的内容，其中`f -> _IO_write_base`的偏移为`0x20`，`f -> _IO_write_ptr`为`0x28`
 
 **参考链接：**
 

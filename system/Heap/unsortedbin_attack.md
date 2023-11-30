@@ -54,7 +54,7 @@ bck->fd = unsorted_chunks (av);
 
 正常情况下，这一小段代码会将`victim`取出，而`unsorted bin`继续保持双向链表。注意，`victim`始终是`unsorted bin`里面的最后一个`chunk`，因为是反向遍历的`unsorted bin`，且遍历到的`chunk`要么会返回给用户，要么就会被移动到`small bin`或者`large bin`里面去。
 
-而攻击情况下，我们将控制`victim`的`bk`指针为希望进行地址修改的地方减去`8byte`的地方（32位为`4byte`）。
+而攻击情况下，我们将控制`victim`的`bk`指针为希望进行地址修改的地方减去`0x10`的地方。
 
 我们通过画图的方式来解释一下正常情况和攻击的情况。
 

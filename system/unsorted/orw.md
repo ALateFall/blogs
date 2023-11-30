@@ -52,6 +52,16 @@ int open(const char *filename, int flags, mode_t mode);
 
 此外，`open`函数的系统调用号`rax`为`2`。
 
+# open系统调用被禁用
+
+尝试使用`openat()`函数
+
+```c
+int openat(int dirfd, const char *pathname, int flags, ...);
+```
+
+只需要写`openat(0, '/flag\x00')`的形式即可
+
 # write函数/read函数
 
 这两个函数比较常用，此处不再赘述。
@@ -109,5 +119,15 @@ mov rcx, [rdi+0xa8];
 // 即
 mov rcx, [0x5630f8b0a8];
 // 我们知道0x5630f8b0a8处的内容为retn，那么会pop rip,程序开始执行orw_gadgets。
+```
+
+# 通过_environ获取栈地址
+
+在`orw`时，除了可以通过`setcontext`以外，还可以通过`_environ`来获得栈地址。`libc`中的`_environ`中存放了一个栈地址，该栈地址中存放的是环境变量的地址，因此知道`libc`地址的情况可以通过`_environ`来获取栈的地址，从而控制程序执行流。如下所示：
+
+```python
+libc.address = 0x7fxxxxxx
+_environ = libc.sym['_environ']
+# _environ中存放了栈地址
 ```
 

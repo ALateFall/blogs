@@ -38,7 +38,7 @@ date: 2023-9-20 12:00:00
 
 很多时候`fastbin attack`为了绕开`memory corruption (fast)`，需要使用`malloc_hook`或者`free_hook`附近的`0x7f`来构造一个`fake chunk`。实际上，`size`为`0x7f`的`chunk`去掉`N M P`位，也就是`0x78`，由于最后`0x8`是在下一个`chunk`的`prev_size`字段，那么实际上`0x7f`的`chunk`是对应`size`为`0x70`的普通`chunk`，也就是通过`malloc(0x60)`得到的。
 
-# one_gadget环境变量修改
+# one_gadget环境变量修改（realloc_hook调整栈帧）
 
 `one_gadget`并不是直接就生效的，而是在一定条件下才生效，如下图所示，`constraints`部分就是必须满足的条件。
 
@@ -159,3 +159,105 @@ _dl_rtld_unlock_recursive = _rtld_global + 0xf10
 # 通过largebin泄露堆地址
 
 总是忘了在`largebin`中只有一个`chunk`的时候它的`fd_nextsize`和`bk_nextsize`会指向自身。特此记录，可以通过`largebin`的`bk_nextsize`和`fd_nextsize`来泄露堆地址。
+
+# 反调试
+
+部分题目可能会使用子进程、`ptrace`的方式来防止调试，一旦调试就会出错。这种情况直接`patch`掉该部分即可，例如`call`反调试的函数可以直接跳转到下一条指令转而不执行`call`。
+
+# canary绕过大全
+
+## 泄露canary
+
+打印栈上地址，覆盖`canary`末尾的`\x00`来直接打印
+
+## 爆破canary
+
+实际上`canary`在某些场景确实可以爆破，比如在多进程时，每个子进程的`canary`都是相同的。因此可以采用`one-by-one`的方式来对`canary`进行爆破
+
+## 劫持__stack_chk_failed函数
+
+`canary`校验失败时会跳转到`__stack_chk_failed`函数，因此可以劫持其`got`表来利用这一点
+
+## 覆盖TLS中的canary
+
+`canary`实际上存放在`TLS, Thread Local Storage`结构体里，校验`canary`时会通过`fs`结构体中的值和当前的`canary`进行比对，若不同则报错。因此可以通过覆盖掉`TLS`结构体中的值来绕过这个校验。但这种绕过方法也有前提，也就是只有当这个程序的**子进程**中存在溢出时，才可以在子进程中溢出来覆盖`TLS`，这是因为主进程中`TLS`结构体的位置并不固定，而子进程中该结构体和栈都使用`mmap`映射到了同一个段中，且其地址比子进程的栈高。因此，在子进程中若存在长度极大的溢出，可以覆盖`TLS`来覆盖`canary`。
+
+在`gdb`中，可以通过如下方式查看该结构体：
+
+```
+p/x *(tcbhead_t*)(pthread_self())
+```
+
+如下所示：
+
+```
+{
+  tcb = 0x7ffff7d99700,
+  dtv = 0x6032b0,
+  self = 0x7ffff7d99700,
+  multiple_threads = 0x1,
+  gscope_flag = 0x0,
+  sysinfo = 0x0,
+  stack_guard = 0x1ba15d91dd80a100,
+  pointer_guard = 0x6322b58812f391de,
+  vgetcpu_cache = {0x0, 0x0},
+  feature_1 = 0x0,
+  __glibc_unused1 = 0x0,
+  __private_tm = {0x0, 0x0, 0x0, 0x0},
+  __private_ss = 0x0,
+  ssp_base = 0x0,
+  __glibc_unused2 = {{{
+        i = {0x0, 0x0, 0x0, 0x0}
+      }, {
+      .........
+       }},
+  __padding = {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}
+}
+```
+
+其中的`stack_guard`就是`canary`的值。可以在`gdb`中定位到这个`stack_guard`的地址，覆盖掉这个值。如：
+
+```
+pwndbg> p/x &(*(tcbhead_t*)(pthread_self())).stack_guard
+$10 = 0x7ffff7d99728
+```
+
+# 栈溢出难以回到主函数重新执行一遍
+
+部分栈溢出尤其是`ret2libc`等题目时，通常会先泄露`libc`，再重新回到`main`函数或者存在栈溢出的函数重新执行一遍以执行`ROP`。但有的情况下中间会经历太过复杂的操作，因此可以直接使用如下方式：
+
+- 在`ROP`链中泄露`libc`，同时调用程序中的`read`函数读`gadgets`到`bss`段
+- 布置`leave_ret`，使得栈迁移到`bss`段执行剩下的`gadgets`，避免重新执行整个流程
+
+# shellcode题目
+
+## 输入shellcode长度有限
+
+- 可以考虑构造一个`read`和`ret`到`rsp`，再输入`shellcode`到`rsp`执行。栈不可执行的话也可输入`rop`链
+- 要注意：`read`的`rdx`也就是长度不能太长
+- `push`不能输入`64`位立即数
+- 可以用`push`再`pop`的方式来将`rdx`里存放`rsp`的值而不是`mov rdx, rsp`，这是因为前者字节数更短
+- 一个例子如下：
+
+```assembly
+# 可以完成一个read系统调用的rdx和rsi部分
+push rsp
+pop rsi
+mov edx, esi
+syscall
+ret
+```
+
+# 将global_max_fast打了unsortedbin后链表损坏如何打fastbin attack
+
+`unsortedbin attack`打了之后链表会损坏，若是要继续申请其它`chunk`将会出错。
+
+而一种攻击方式是打`global_max_fast`，使用`unsortedbin attack`打`global_max_fast`之后，来打`fastbin attack`。
+
+然而，`unsortedbin attack`之后链表损坏，已经难以申请新的`chunk`了。
+
+解决办法是，在`unsortedbin attack`时，通过切割，将要进行`unsortedbin attack`的`unsortedbin chunk`的大小设置为接下来要进行`fastbin attack`的大小。如此一来，通过`malloc`来申请`unsorted chunk`并触发`unsortedbin attack`之后，只需要将这个`chunk`进行`free`就可以将其置入对应的`fastbin`了。
+
+# 通过libc偏移进行堆地址泄露
+
+`libc.sym['__curbrk']`是堆地址的一个固定偏移
