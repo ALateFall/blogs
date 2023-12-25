@@ -92,8 +92,8 @@ top[1] = 0x61; // 更改top chunk的size为0x61，在触发unsortedbin attack后
 有的读者可能注意到我们将`top chunk`置入`unsortedbin`后，一直没有调用`malloc`来触发`unsortedbin attack`，也没有将`top chunk`置入`small bin`中。实际上在最后调用`malloc`时，这个申请内存的操作会先后触发`unsortedbin attack`，然后将其置入`small bin`；并且由于`unsortedbin attack`时已经破坏了其链表结构，因此会触发`malloc() -> malloc_printerr() -> __libc_message() -> abort() -> fflush() -> _IO_flush_all_lockp() -> _IO_new_file_overflow()`函数的调用链。因此，在`malloc`之前，我们需要检查剩下的安全机制，来保证我们的攻击可以成功。在`_IO_flush_all_lockp()`函数中，要满足要求`fp->_mode <= 0 && fp->_IO_write_ptr > fp->_IO_write_base`。因此，可以设置如下条件：
 
 - `fp->_mode=0`，其中`_mode`对于起始位置的偏移是`0xc0`
-- `fp->_IO_write_base = (char*)2;`
-- `fp->_IO_wirte_ptr = (char*)3;`
+- `fp->_IO_write_base = (char*)2;`，其中`_IO_write_base`偏移为`0x20`
+- `fp->_IO_wirte_ptr = (char*)3;`，其中`_IO_write_ptr`偏移为`0x28`
 
 满足以上条件后，我们便可以覆盖掉`_IO_new_file_overflow`函数的函数指针了。`vtable`中的函数如下：
 

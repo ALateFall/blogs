@@ -2,7 +2,7 @@
 layout: post
 title: glibc做题思路
 category: system/Heap
-date: 2023-11-27 18:38
+date: 2023-9-27 18:38
 ---
 
 `glibc`题目的一些做题思路
@@ -17,3 +17,13 @@ date: 2023-11-27 18:38
 
 - `glibc2.27`中可以通过修改`tcache_perthread_struct`，来控制`tcache`某个大小的数量。超过的会被放到`unsortedbin`
 - 可以通过`malloc`一个很大的`chunk`从而使用`mmap`来分配，其地址为`libc`的固定偏移
+
+# 堆地址泄露
+
+- `fastbin`、`tcache`等在不止一个`chunk`时的`fd`指针
+- `libc`中的`_curbrk`变量，例如`libc.sym['_curbrk']`
+
+# 栈地址泄露
+
+- 栈上地址的固定偏移
+- `libc`中的`_environ`变量指示了一个栈地址，即`libc.sym['_environ']`

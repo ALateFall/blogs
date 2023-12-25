@@ -80,7 +80,7 @@ malloc => __malloc_hook => realloc => 一系列的push操作 => __realloc_hook =
 2,4,6,12,13,20
 ```
 
-# exit_hook
+# exit_hook(stdlib/exit.c)
 
 实际上这并不是一个真正意义上的`hook`，因为它实际上是劫持了一个指针而已。
 
@@ -129,7 +129,7 @@ exit -> __run_exit_handlers -> _dl_fini
 
 ![image-20231022141016950](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/image-20231022141016950.png)
 
-即，我们只需要覆盖该地址处的值为`one_gadget`即可。该地址和`libc`的偏移是固定的，可以直接算出，也有的师傅是通过以下三行代码来完整算出的：
+即，我们只需要覆盖该地址处的值为`one_gadget`即可。需要注意，该`exit_hook`是`ld`的固定偏移，而不是关于`libc`的固定偏移。若能得知`libc`和`ld`的偏移，可以使用以下方式算出：
 
 ```c
 ld_base = libc_base + 0x1f4000
@@ -138,7 +138,95 @@ _dl_rtld_lock_recursive = _rtld_global + 0xf08
 _dl_rtld_unlock_recursive = _rtld_global + 0xf10
 ```
 
+此外，若无法打`one_gadget`，也可以打`system`，其参数为`_rtld_global.dl_load_lock.mutex`。推荐通过调试得出。
+
+# exit_hook 2
+
+在`exit.c`的源码中有这样一段：
+
+```c
+__run_exit_handlers (int status, struct exit_function_list **listp,
+             bool run_list_atexit, bool run_dtors)
+{
+...
+if (run_list_atexit)
+    RUN_HOOK (__libc_atexit, ()); // 可以打__libc_atexit
+...
+```
+
+其中，只要`exit`正常被调用，`run_list_atexit`就为真，如下所示：
+
+```c
+void exit (int status)
+{
+  __run_exit_handlers (status, &__exit_funcs, true, true); // 传的run_list_atexit为True
+}
+```
+
+这个`exit_hook`最大的优点是其在`libc`而不是`ld`中，缺点是无法传参，只能看运气打`one_gadget`。
+
+而`__libc_atexit`是`libc.so.6`中的一个段，要找它的偏移只需要在`ida`中查看该段(`segments`)的地址即可。
+
+或者在`gdb`中使用如下方式查看：
+
+```bash
+p &__elf_set___libc_atexit_element__IO_cleanup__
+```
+
+**最大的问题是，这种`hook`在很多版本是不可写的，包括`glibc2.23`和`glibc2.27`等。在`glibc 2.31-0ubuntu9.2`中是可写的，而在`glibc 2.31-0ubuntu9.7`中又不可写。因此，这种`hook`并不能保证通用，在适当的时候可以偷家。**
+
+# exit_hook 3
+
+这是打`SCUCTF2023`新生赛学到的一个`exit_hook`。我们知道`fini_array`会在程序结束的时候被调用。而`fini_array`是在`elf`中的，因此在开启`PIE`时，一定会将`fini_array`来加上程序基地址来获取到`fini_array`的实际地址，从而执行里面的函数。因此，**在`libc`（其实是`ld`**）中必然存放有`code_base`，事实上也确实如此。在程序执行`fini_array`时，首先从`_rtld_global._dl_ns[0]._ns_loaded->l_addr`中来获取到`code_base`，也就是程序基地址，接下来再通过该基地址来加上`elf`中的`fini_array`的值，通过该指针来执行里面的函数。
+
+因此，若对`_rtld_global._dl_ns[0]._ns_loaded->l_addr`进行覆盖，便可以起到`hook`的作用。只需要满足以下式子即可：
+
+```c
+_rtld_global._dl_ns[0]._ns_loaded->l_addr(修改后) + fini_array of elf == one_gadget (任意要执行的函数)
+```
+
+这里通常情况下可能不太好打`one_gadget`，也可以打`system`，调试一下观察`rdi`，也是一个可以打的值。
+
+**获取该`hook`的地址：**
+
+```c
+p/x &_rtld_global._dl_ns[0]._ns_loaded->l_addr
+p/x &(*_rtld_global._dl_ns[0]._ns_loaded).l_addr
+```
+
+最终，执行该`hook`的代码位于`elf/_dl_fini.c`中，代码如下：
+
+```c
+while (i-- > 0)
+     ((fini_t) array[i]) ();
+ }
+```
+
+其中汇编代码如下：
+
+```assembly
+ ► 0x7f99aefbaf5b <_dl_fini+507>    lea    r14, [rsi + rax*8]
+   0x7f99aefbaf5f <_dl_fini+511>    test   edx, edx
+   0x7f99aefbaf61 <_dl_fini+513>    je     _dl_fini+536                <_dl_fini+536>
+ 
+   0x7f99aefbaf63 <_dl_fini+515>    nop    dword ptr [rax + rax]
+   0x7f99aefbaf68 <_dl_fini+520>    call   qword ptr [r14]
+```
+
+可以看到`rax`是数组的`i`，在`i=0`时最后执行的即是`rsi`存放的值指向的值。
+
+在调用这个函数时，该`rdi`也是可控的，在笔者本次调试为`_rtld_global+2312`
+
+# 通过ld来获取程序基地址
+
+```c
+_rtld_global._dl_ns[0]._ns_loaded->l_addr // 因为_rtld是ld里面的
+    // 低版本可能libc和ld有固定偏移，也可以尝试用一下
+```
+
 # off by null制作三明治结构
+
+先一句话：大小大，通过小覆盖第二个大的`prev_inuse`，同时改第二个大的`prev size`，按照顺序释放两个大，此时三个合并，申请第一个大回来，此时可以通过小来获得`libc`，再次申请还可以获得重叠指针，进而使用`UAF`进行`fastbin attack`或者`unsortedin attack`等
 
 `off-by-null`，本部分是在做西南赛区国赛2019年的`pwn2`总结的，该题目环境是`ubuntu18, glibc2.27`。
 
@@ -151,6 +239,12 @@ _dl_rtld_unlock_recursive = _rtld_global + 0xf10
 如上图，构造如上的形式即`chunk0`在`unsortedbin`，`chunk1`来`off-by-null`掉`chunk2`的`size`末尾使得`chunk2`认为`prev`是`free`的，同时将`chunk2`的`prev_size`写成`chunk0+chunk1`。
 
 此时释放`chunk2`，会将三个`chunk`合并成一个并置入`unsortedbin`。切割下来`chunk0`，打印`chunk1`即可泄露`libc`地址（`chunk1`虽然合并在里面，但是它并没有被释放）。再次切割`chunk1`下来，就有两个指向`chunk1`的指针了。
+
+# off-by-null制作三明治结构-revenge(calloc)
+
+上面我们通过三明治结构可以构造重叠指针。若可以实现多次`off-by-null`，我们可以在构造重叠指针后，重新将三明治结构再制作一遍，然后三个`chunk`合并添加到`unsortedbin`时，可以直接再次`delete`小的，此时小的会添加到`fastbin`，然后申请第一个大的，就会使得小的`fd`和`bk`被写`main_arena+88`。这个在使用`calloc`申请的时候比较有用。
+
+即：两次三明治结构会让保留有重叠指针的情况下让三个`chunk`再次合并为一个`unsortedbin chunk`。
 
 # glibc2.23下通过劫持vtable来getshell
 
@@ -261,3 +355,15 @@ ret
 # 通过libc偏移进行堆地址泄露
 
 `libc.sym['__curbrk']`是堆地址的一个固定偏移
+
+# 通过FSOP触发setcontext+53
+
+在`orw`中可以通过`FSOP`触发`setcontext+53`，此时`rdi`是当前正在刷新的`_IO_FILE_plus`，因此假如将当前的`_IO_FILE_plus`劫持为堆上的`chunk`后，即可控制`rdi`来控制程序执行流。
+
+# tcache无法leak时直接修改tcache_perthread_struct
+
+在`tcache`中含有多个`chunk`时，`tcache`存储的指针和`tcache_perthread_struct`存在固定偏移，可以直接`partial overwrite`。
+
+# tcache中释放tcache_perthread_struct获得unsorted bin chunk
+
+如题

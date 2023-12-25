@@ -49,21 +49,26 @@ typedef struct tcache_perthread_struct
 
 与`fastbin`的`house of spirit`是相当类似的，不同的是，`tcache`的`house of spirit`更加简单，可以直接在任意地方伪造一个`chunk`然后进行`free`。`fast bin`的`house of spirit`还需要控制要`free`的下一个`chunk`的`size`域。
 
-## tcache stashing unlink attack
+## tcache_stash_unlink_attack
 
-这个可以完成任意地址的`chunk`申请。
+`tcache stash unlink`可以达成两个目的：
 
-首先要知道两个小知识点：
+- 任意地址申请一个`fake chunk`
+- 往任意地址写一个`main_arena`地址
 
-- `calloc`获取`chunk`不会从`tcache`中获取
-- 在`tcache`有空闲位置的情况下，若从`small bin`中获取到了一个`chunk`，那么会将`small bin`中的所有`chunk`挂到`tcache`中
+看起来就像`fastbin attack`和`unsortedbin attack`的结合，威力很强，但是同时利用条件也非常苛刻：
 
-通过上面两个知识点即可完成`tcache stashing unlink attack`。讲一下流程：
+- 需要保证同一种大小的`chunk`在`tcache`中有`5`个，而在`smallbin`中有`2`个。（一般利用）
+- 至少进行一次`calloc`
+- 需要`UAF`来对`smallbin`中的`chunk`进行修改
 
-- 通过一定方式，让`tcache`和`small bin`中同时存在某个大小的`chunk`，且`small bin`中不止一个
-- 修改`small bin`中的末尾的`chunk`的`bk`指针，使其指向要申请的`fake chunk`。
-- 使用`calloc`申请一个`chunk`，此时被修改过的`chunk`将会被挂入`tcache`。而由于该`chunk`的`bk`指针被修改，那么操作系统会误认为该`fake chunk`也在`small bin`中，此时也会被挂入`tcache`中。
-- 由于`tcache`是`LIFO`，只要直接申请就可以获得该`fake chunk`。
+其原理是：
+
+首先需要知道`calloc`。`calloc`和`malloc`有两个不同点，其一是会自动清零申请到的`chunk`，其二是`calloc`不会申请`tcache`中的`chunk`。而`smallbin`有一个特点，那就是当`smallbin`中的`chunk`被申请后，其通过`bk`相连的所有`chunk`都会被挂入`tcache`。
+
+由此，我们可以修改后插入的`chunk`（它的`bk`指针指向`main_arena`）的`bk`指针，使其指向我们控制的`fake_chunk`。只要进行一次`calloc`，`glibc`会使得其从`smallbin`中申请一个`chunk`，然后将剩下的`smallbin`中的`chunk`都挂入`tcache`（包括我们修改后的`smallbin chunk`）。当我们修改后的`chunk`被挂入`tcache`后，由于其是通过`bk`指针来寻找下一个`chunk`的，因此会将`fake_chunk`也挂入`tcache`。
+
+然后，其会试图再将`fake_chunk`的`bk`也挂入`tcache`，其中会使得：`bck->fd=bin`，会使得`fake_chunk`的`bk`指针指向的`chunk`的`fd`写一个`main_arena`地址。因此，若我们想要在`target_addr`写一个`main_arena`的值，我们需要控制`fake_chunk`的`bck`的值为`target_addr-0x10`。
 
 ## tcache_perthread_struct hijacking
 

@@ -6,6 +6,7 @@ date: 2023-9-21 12:00:00
 ---
 ORW
 <!-- more -->
+
 [toc]
 
 
@@ -54,7 +55,7 @@ int open(const char *filename, int flags, mode_t mode);
 
 # open系统调用被禁用
 
-尝试使用`openat()`函数
+尝试使用`openat()`函数，它的系统调用号是`257`，可以`syscall`调用也可以直接`libc`调用
 
 ```c
 int openat(int dirfd, const char *pathname, int flags, ...);
@@ -73,14 +74,14 @@ int openat(int dirfd, const char *pathname, int flags, ...);
 在低版本的`glibc`中，`setcontext`中有一段`gadgets`如下：
 
 ```assembly
-<setcontext+53>:  mov    rsp,QWORD PTR [rdi+0xa0]
+<setcontext+53>:  mov    rsp,QWORD PTR [rdi+0xa0] *
 <setcontext+60>:  mov    rbx,QWORD PTR [rdi+0x80]
 <setcontext+67>:  mov    rbp,QWORD PTR [rdi+0x78]
 <setcontext+71>:  mov    r12,QWORD PTR [rdi+0x48]
 <setcontext+75>:  mov    r13,QWORD PTR [rdi+0x50]
 <setcontext+79>:  mov    r14,QWORD PTR [rdi+0x58]
 <setcontext+83>:  mov    r15,QWORD PTR [rdi+0x60]
-<setcontext+87>:  mov    rcx,QWORD PTR [rdi+0xa8]
+<setcontext+87>:  mov    rcx,QWORD PTR [rdi+0xa8] *
 <setcontext+94>:  push   rcx
 <setcontext+95>:  mov    rsi,QWORD PTR [rdi+0x70]
 <setcontext+99>:  mov    rdx,QWORD PTR [rdi+0x88]
@@ -113,7 +114,7 @@ mov rsp, [0x5630f8b000 + 0xa0];
 mov rsp, [0x5630f8b0a0];
 // 即意味着我们只需要控制chunk_a偏移0xa0的地方的chunk，就是控制了上面提到的`[rdi+0xa0]`。以这里为例子继续看：
 // 假设chunk_b的地址为0x5630f8b0a0，我们已经对其进行了控制
-// chunk_b存放的内容为：p64(orw_gadgets) p64(retn)
+// chunk_b存放的内容为：p64(addr_of_orw_gadgets) p64(retn)
 // 程序继续执行到<setcontext+87>，即：
 mov rcx, [rdi+0xa8];
 // 即
