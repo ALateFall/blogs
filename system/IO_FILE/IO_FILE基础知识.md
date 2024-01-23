@@ -50,6 +50,54 @@ _unused2 = {0x0 <repeats 20 times>} // 0xc4 大小0x14
 vtable = 0x7ffff7dd06e0 // 0xd8
 ```
 
+# IO_FILE利用链总结
+
+## printf利用链 -- glibc2.23
+
+这条利用链如下：
+
+```c
+printf -> vfprintf -> buffered_vfprintf -> _IO_sputn（覆盖该函数指针）
+```
+
+这条利用链的需要满足的条件有三点，第一个是进入`buffered_vfprintf`函数，如下所示：
+
+```c
+if (UNBUFFERED_P (s))
+	return buffered_vfprintf (s, format, ap);
+// #define UNBUFFERED_P(S) ((S)->_IO_file_flags & _IO_UNBUFFERED)
+// #define _IO_UNBUFFERED 2
+```
+
+因此，`_flags`需要含有2。
+
+第二个条件是`buffered_vfprintf`函数中存在`_IO_flockfile`宏限制：
+
+```c
+# define _IO_flockfile(_fp) \
+  if (((_fp)->_flags & _IO_USER_LOCK) == 0) _IO_flockfile (_fp)
+// #define _IO_USER_LOCK 0x8000
+```
+
+若`_flags`不含有`0x8000`，那么会调用`_IO_flockfile`函数对文件加锁。因此`_flags`需要含有`0x8000`。
+
+第三个条件调用函数指针时：
+
+```c
+if ((to_flush = hp->_IO_write_ptr - hp->_IO_write_base) > 0)
+{
+  	if ((int) _IO_sputn (s, hp->_IO_write_base, to_flush) != to_flush)
+		result = -1;
+}
+```
+
+因此需要`_IO_write_ptr > _IO_write_base`即可。
+
+总结条件如下：
+
+- `_flags`需要包含`0x8000`和`0x2`，即起码需要为`0xfbad8002`的形式。（偏移为`0x0`）
+- `_IO_write_ptr > _IO_write_base`，偏移分别为`0x28`和`0x20`。
+
 ## C语言中默认的缓冲模式
 
 - 对于`stdin`和`stdout`，默认是行缓冲的，这意味着部分行不会显示，直到打印了换行符、调用了`fflush()`，或程序退出。（**本人测试实际上是全缓冲**）

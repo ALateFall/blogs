@@ -2,7 +2,7 @@
 layout: post
 title: CTF-PWN做题的思路小记
 category: system/tricks
-date: 2023-9-20 12:00:00
+date: 2023-12-28 12:00:00
 ---
 栈溢出基础知识点
 <!-- more -->
@@ -24,7 +24,57 @@ date: 2023-9-20 12:00:00
 
 # 存在格式化字符串漏洞，但是只能利用一次
 
-程序在结束的时候会遍历`fini_array`里面的函数进行执行，将其劫持为`main`函数将会重新执行一次`main`函数。
+程序在结束的时候会遍历`fini_array`里面的函数进行执行，将其劫持为`main`函数将会重新执行一次`main`函数。要无限执行，请看下一条。
+
+# fini_array劫持无限执行main函数
+
+若只覆盖`array[1]`为`main_addr`，那么只会执行一次`main`函数便会执行下一个`array`中的函数。
+
+要无限执行某个函数，需要使用这个方式：
+
+```tex
+array[0]覆盖为__libc_csu_fini
+array[1]覆盖为另一地址addrA
+
+其中，start函数中的__libc_start_main函数的第一个参数为main函数地址
+第四个参数为__libc_csu_init函数，在main函数开始前执行
+第五个参数为__libc_csu_fini函数，在main函数结束时执行
+```
+
+这是因为默认情况下，`fini`数组中函数中存放的函数为：
+
+```c
+array[0]:__do_global_dtors_aux
+array[1]:fini
+```
+
+而在`__libc_csu_fini`函数中会调用这两个函数，其执行顺序为`array[1] -> array[0]`。
+
+修改后，其执行顺序将会变为：
+
+```c
+main -> __libc_csu_fini -> addrA -> __libc_csu_fini -> addrA -> __libc_csu_fini ....
+```
+
+从而达到无限执行的目的。
+
+终止条件即只要当`array[0]`不为`__libc_csu_fini`即可。
+
+## 通过fini_array栈迁移来实现ROP
+
+通过上面的无限循环方法执行某个函数时，若该函数可以进行一个任意地址写，那么我们便可以利用上述方式在`array[2]`处布置`rop`链。
+
+布置完成后，布置`fini_array`为如下形式：
+
+```c
+fini_array + 0x00: leave_ret (gadget)
+fini_array + 0x08: ret (gadget)
+fini_array + 0x10: ROP chain
+```
+
+由于本身执行的函数是存放于`array[1]`的，因此执行完后会执行`array[0]`处的`leave_ret`的`gadget`，导致`rip`为`ret`，然后执行我们布置的`rop`链。
+
+[参考文献](https://www.freebuf.com/articles/neopoints/226003.html)
 
 # 存在栈溢出，但是只能覆盖返回地址，无法构建ROP链
 
@@ -32,7 +82,7 @@ date: 2023-9-20 12:00:00
 
 # off-by-one利用
 
-- 上一个`chunk`末尾为`0x8`这种类型，那么通过`off-by-one`可以任意修改下一个`chunk`的大小，将其改大，并将其释放，再申请，即可造成`chunk`的重叠，即被改大的这个`chunk`和它之后的`chunk`重叠，那么可以通过修改这个`chunk`来修改被重叠的`chunk`。同时也可以将重叠的`unsorted chunk`释放，打印被改大的`chunk`，即可泄露`libc`。
+上一个`chunk`末尾为`0x8`这种类型，那么通过`off-by-one`可以任意修改下一个`chunk`的大小，将其改大，并将其释放，再申请，即可造成`chunk`的重叠，即被改大的这个`chunk`和它之后的`chunk`重叠，那么可以通过修改这个`chunk`来修改被重叠的`chunk`。同时也可以将重叠的`unsorted chunk`释放，打印被改大的`chunk`，即可泄露`libc`。
 
 # fastbin attack的0x7f
 
@@ -240,6 +290,38 @@ _rtld_global._dl_ns[0]._ns_loaded->l_addr // 因为_rtld是ld里面的
 
 此时释放`chunk2`，会将三个`chunk`合并成一个并置入`unsortedbin`。切割下来`chunk0`，打印`chunk1`即可泄露`libc`地址（`chunk1`虽然合并在里面，但是它并没有被释放）。再次切割`chunk1`下来，就有两个指向`chunk1`的指针了。
 
+## 修复与破局
+
+遗憾的是，从`glibc2.29`开始，合并时会检查合并的`size`和`prev_size`是否相同，传统的三明治也就没有办法使用了。
+
+`off-by-null`可以通过在泄露了堆地址的情况下构造`unlink`。**注意：**
+
+**本来`small bin`和`fastbin `正常情况下不会使用`unlink`。**
+
+**但实际上，只是因为若是fastbin或者smallbin或者tcachebin，不会设置下一个chunk的prev_size和prev_inuse位罢了。**
+
+**若我们设置了这两个位，同样可以对fastbin、smallbin、tcache进行unlink，从而构造重叠指针等。**
+
+我们同样利用`off-by-null`和`unlink`来用三明治类似的思想进行重叠指针的构造。
+
+构造如下图所示：
+
+![image-20240113164151315](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202401131641391.png)
+
+可能比较难以理解，我们详细、分步地解释：
+
+注意，若我没有写对某个堆块`free`，那么它**没有**被`free`。此外，我们需要**提前泄露堆地址**，保证每个堆块地址可知。
+
+我们有三个`chunk`，分别是`chunk1`、`chunk2`、`chunk3`，其中`chunk3`是个`large chunk`，大小为`0x500`，另外两个为大小为`0x30`的`chunk`。
+
+- 我们通过`chunk2`写`chunk3`的`prev_size`等于`0x50`，并`off-by-null`将`chunk3`的`prev_in_use`置为`0`。
+- 正常情况的`unlink`我们需要知道一个指向合并后堆块的指针，那么我们在`chunk2`中写一个合并后堆块的地址，也就是在`addr2`处写一个`addr1`。
+- 在`chunk1`中构造`fake chunk`，`fake chunk`的`size`为`fake chunk + chunk2`的大小，这里为`0x51`
+- `fake chunk`的`fd`为`addr2-0x18`，而`bk`为`addr2-0x10`，因为`addr2`存放的是它自己的地址，是个指向它自己的指针，绕过`unlink`安全检查。
+- `free`掉`chunk3`，此时通过`chunk3`的`prev_size`来找到`fake chunk`，将`fake chunk`进行`unlink`，从而导致`chunk1-3`合并为一个。
+- 还需要注意的就是，`glibc2.29`下，从`tcache`中获得`chunk`还会检查对应`tcache bin`的`count`是否大于`0`，大于`0`才可以申请。因此需要事先释放一个对应大小的`chunk`。
+- 此时三个`chunk`会合并到`fake chunk`的位置而不是`chunk1`的位置。申请回一个大于`fake chunk + chunk1`大小的`chunk`，即可编辑`chunk2`，获得了`chunk2`的重叠指针。
+
 # off-by-null制作三明治结构-revenge(calloc)
 
 上面我们通过三明治结构可以构造重叠指针。若可以实现多次`off-by-null`，我们可以在构造重叠指针后，重新将三明治结构再制作一遍，然后三个`chunk`合并添加到`unsortedbin`时，可以直接再次`delete`小的，此时小的会添加到`fastbin`，然后申请第一个大的，就会使得小的`fd`和`bk`被写`main_arena+88`。这个在使用`calloc`申请的时候比较有用。
@@ -274,7 +356,19 @@ _rtld_global._dl_ns[0]._ns_loaded->l_addr // 因为_rtld是ld里面的
 
 ## 覆盖TLS中的canary
 
-`canary`实际上存放在`TLS, Thread Local Storage`结构体里，校验`canary`时会通过`fs`结构体中的值和当前的`canary`进行比对，若不同则报错。因此可以通过覆盖掉`TLS`结构体中的值来绕过这个校验。但这种绕过方法也有前提，也就是只有当这个程序的**子进程**中存在溢出时，才可以在子进程中溢出来覆盖`TLS`，这是因为主进程中`TLS`结构体的位置并不固定，而子进程中该结构体和栈都使用`mmap`映射到了同一个段中，且其地址比子进程的栈高。因此，在子进程中若存在长度极大的溢出，可以覆盖`TLS`来覆盖`canary`。
+`canary`实际上存放在`TLS, Thread Local Storage`结构体里，校验`canary`时会通过`fs`结构体中的值和当前的`canary`进行比对，若不同则报错。因此可以通过覆盖掉`TLS`结构体中的值来绕过这个校验。这种绕过方式会根据子进程还是主进程而有略微的不同。
+
+### 子进程
+
+子进程中该结构体和栈都使用`mmap`映射到了同一个段中，且其地址比子进程的栈高。因此，可以直接通过栈溢出来覆盖掉`tls`结构体。即在子进程中若栈存在长度极大的溢出，可以覆盖`TLS`来覆盖`canary`。
+
+### 主进程
+
+主进程中`tls`结构体仍然位于映射段，但我们知道映射段实际上是基于`libc`地址的一个偏移。因此，要修改`tls`结构体基本上不能通过简单的栈溢出，而是可以考虑有`libc`地址的情况下打一个任意地址写，或者是`malloc`一个很大的内存，使其通过`mmap`分配到映射段前面，然后通过堆块溢出来修改`tls`结构体的值。
+
+归根到底，子进程的`tls`结构体同样也在映射段上，只是因为子进程的栈也是映射出来的，因此可以直接栈溢出来修改。
+
+### 覆盖方式
 
 在`gdb`中，可以通过如下方式查看该结构体：
 
@@ -315,6 +409,19 @@ p/x *(tcbhead_t*)(pthread_self())
 pwndbg> p/x &(*(tcbhead_t*)(pthread_self())).stack_guard
 $10 = 0x7ffff7d99728
 ```
+
+如果上面的方法没有找到`canary`的存放地址（这是很有可能发生的），可以直接在`gdb`中寻找`tls`结构体中`canary`的地址。
+
+在`gdb`中可以通过`canary`命令查看`canary`的值（有时候也无法得出结果，就在栈上观察一下）。随后，通过`gdb`搜索内存空间内还有何处有该值。
+
+`32`位和`64`位下分别为：
+
+```bash
+search -4 0x73a2f100 # 假设后面那个值为canary的值
+search -8 0x58e1f3982b6400 # 后面那个值为canary的值
+```
+
+
 
 # 栈溢出难以回到主函数重新执行一遍
 
@@ -367,3 +474,75 @@ ret
 # tcache中释放tcache_perthread_struct获得unsorted bin chunk
 
 如题
+
+# 没有leak时通过stdout泄露地址
+
+如果没有`leak`，那么可以考虑通过打`unsortedbin`中残留的`libc`指针，通过`partial overwrite`的方式来操纵`stdout`泄露地址。
+
+# ROP中的magic gadget
+
+## inc
+
+用到的`gadget`是：
+
+```assembly
+inc dword ptr [ebp - 0x17fa8b40] ; ret 0
+```
+
+由于那道题中的`ebp`可以随便控制，且`got`表可以写，因此我们构造一下，使得一直让`atol`的`got`表值+1，直到等于`system`。事实上这道题不是直接用这个`gadget`来一直`+1`的，而是使用其来给倒数第二字节一直`+1`，最低位直接用`read`来读，以此来减少`+1`的次数。
+
+## ebx的magic gadget
+
+```assembly
+$ ROPgadget --binary ./cscctf_2019_qual_signal | grep ebx
+0x0000000000400618 : add dword ptr [rbp - 0x3d], ebx ; nop dword ptr [rax + rax] ; ret
+```
+
+如上所示，可以往`[rbp - 0x3d]`加上`ebx`的值。若我们可以控制这两个值，可以往任意地址加上一些值。
+
+通常情况下可以配合`ret2csu`，因为`csu`可以控制这些寄存器嘛。
+
+例如，可以通过`csu`和这个`magic gadget`配合来将`alarm`的`got`表的值加五，`alarm+5`实际上就是`syscall`。
+
+# malloc_consolidate实现fastbin double free->unlink
+
+大小属于`fastbin`的`chunk`被`free`时，会检查和`fastbin`头相连的`chunk`是否是同一个`chunk`。然而，`malloc_consolidate`可以将`fastbin`链表中的`chunk`脱下来添加到`unsortedbin`，并设置其内存相邻的下一个`chunk`的`prev_inuse`为`0`。`malloc_consolidate`可以由申请一个很大的`chunk`触发。由此，若只能释放同一个`fastbin`的`chunk`，可以先`free`它将其添加到`fastbin`，然后使用`malloc_consolidate`将其置入`unsortedbin`。此时便可以再次`free`该`chunk`添加到`fastbin`，此时一个位于`fastbin`，另一个位于`unsortedbin`。申请回`fastbin`的`chunk`，在里面伪造一个`fake chunk`，由于其下一个`chunk`的`prev_inuse`被设置，因此可以进行`unsafe unlink`。不适用于继续`fastbin attack`，因为另一个`chunk`不位于`fastbin`。例题为`sleepyHolder_hitcon_2016`.
+
+# mmap分配的chunk的阈值更改
+
+我们知道`malloc`一个很大的`chunk`时会通过`mmap`来映射到`libc`附近，而不是`top chunk`中分配。
+
+然而，当`free`很大的`chunk`时，其通过`mmap`分配的`chunk`的阈值会改变，改变为`free`的`chunk`的大小的页对齐的值。
+
+例如，第一次`malloc(0x61a80)`，会将其以`mmap`的方式分配到`libc`附近。我们`free`这个`chunk`，此时`mmap`的阈值将会变为`0x62000`。我们再次`malloc(0x61a80)`，将会使得其切割`top chunk`来分配，而不是`mmap`分配到`libc`附近。
+
+# 栈上的字符串数组未初始化泄露libc
+
+某些栈上的字符串若未初始化，可能其中本来存放有一些`libc`地址，可以直接泄露，或者使用`strlen()`、`strdup()`等函数利用。
+
+# strcat、strncat等函数漏洞
+
+这些函数会在末尾补一个`\x00`，有的时候会有奇效（比如覆盖掉下一个变量）
+
+# add和edit是分开的情况
+
+若没有清零堆块，那么这种情况下`add`得到的`chunk`中可以含有各种残留的堆块指针和残留的`libc`地址，可以泄露或使用。
+
+# 若存在alarm，则可以利用偏移得到syscall
+
+如下所示，`alarm+5`即可获得`syscall`，正常情况则没有
+
+![image-20240115104436982](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/image-20240115104436982.png)
+
+# printf中获取到特别长的字符串时会调用malloc和free
+
+如题，因此可以通过这种方式来获得`shell`：
+
+```python
+payload = fmtstr_payload(7, {libc.sym['__malloc_hook']:one_gadget[0] + libc.address})
+payload += b'%100000c'
+```
+
+具体多长呢？说不清楚，但是假如`printf`没有输出那个很长的空白字符串，那就说明执行到`malloc_hook`里面去了，对吧？
+
+所以可以观察是否有这个输出来判断是否是执行了`malloc_hook`。

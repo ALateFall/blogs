@@ -8,6 +8,50 @@ Linux
 <!-- more -->
 [toc]
 
+# ubuntu下编写快速开启\关闭\查看aslr脚本
+
+由于`suid`不能直接作用于`bash`脚本（为了安全考虑），我们这里采用`expect`脚本的方式。如下所示：
+
+关闭`aslr`：
+
+```bash
+#!/usr/bin/expect
+spawn su root
+expect "Password: "
+send "your_password\r"
+send "echo 0 > /proc/sys/kernel/randomize_va_space\r"
+send "exit\r"
+expect eof
+send_user "\n"
+```
+
+将这个脚本放在`/usr/bin`中，给予执行权限即可。
+
+同理，开启`aslr`的脚本如下：
+
+```bash
+#!/usr/bin/expect
+spawn su root
+expect "Password: "
+send "your_password\r"
+send "echo 2 > /proc/sys/kernel/randomize_va_space\r"
+send "exit\r"
+expect eof
+send_user "\n"
+```
+
+查看`aslr`状态：
+
+```bash
+#!/usr/bin/expect
+spawn su root
+expect "Password: "
+send "your_password\r"
+send "cat /proc/sys/kernel/randomize_va_space\r"
+send "exit\r"
+expect eof
+send_user "\n"
+```
 
 # 反弹shell
 
@@ -59,8 +103,9 @@ realloc(ptr, new_size);
 // realloc函数可以重新调整之前分配的内存块的大小。
 // 若ptr为0且new_size > 0，则相当于malloc(new_size)
 // 若new_size为0，则会将ptr进行free
-// 若new_size小于之前的size，相当于edit
-// 若new_size大于之前的size，会malloc新内存，将以前内容复制到新内存，将以前内存free
+// 若new_size非法，则会return NULL
+// 若new_size < old_size - 0x20，则会chunk shrink，多余的部分会直接free
+// 若new_size > old_size，高地址处的chunk为top chunk则直接扩展；高地址处为free状态的chunk，则需要后面free的chunk合并，判断切割后能否满足，否则直接申请新的chunk，复制到新的chunk中，将以前的chunk进行free
 ```
 
 # Linux查找文件
@@ -183,7 +228,7 @@ ln -s source_file soft _link
 
 ![image-20231113131532298](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202311131315342.png)
 
-输入完成后按下`ok`即可完成结构体的创建。无论使用了哪种方式创建结构体，都可以在结构体指针上使用`convert to strcu*`来应用结构体。
+输入完成后按下`ok`即可完成结构体的创建。无论使用了哪种方式创建结构体，都可以在结构体指针上使用`convert to struct*`来应用结构体。
 
 ## 效果演示
 

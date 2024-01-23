@@ -712,7 +712,7 @@ int main(){
 
 - `f -> _flags`为`0xfbad1887`，偏移为`0x0`
 
-- `f -> _fileno`为`1`，偏移为`0x70`
+- 通过`stdout`输出数据
 
 - `f -> _IO_write_base`和 `f -> _IO_write_ptr`之间为输出的内容，其中`f -> _IO_write_base`的偏移为`0x20`，`f -> _IO_write_ptr`为`0x28`
 

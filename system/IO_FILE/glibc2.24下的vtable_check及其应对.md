@@ -236,7 +236,7 @@ int main(){
 总结一下函数调用链`_IO_flush_all_lockp() -> _IO_str_finish() -> system()`需要满足的条件：
 
 - `fp -> _IO_write_ptr`大于`fp -> _IO_write_base` ，分别对应`fp`偏移`0x20`和`0x28`（这是`_IO_flush_all_lockp()`要满足的条件）
-- `fp -> _flag`最低为为`0`，偏移为`0x0`
+- `fp -> _flag`最低位为`0`，偏移为`0x0`
 - 设置`vtable`为`_IO_str_jumps - 0x8`，定位`_IO_str_jumps`可以通过`_IO_file_jumps`等虚表定位。
 - `fp -> _IO_buf_base`存放要执行函数的参数的地址，偏移为`0x38`
 - `(_IO_strfile* )fp -> _s._free_buffer`存放要执行的函数，对应偏移为`0xe8`

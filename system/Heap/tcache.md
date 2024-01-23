@@ -97,3 +97,13 @@ typedef struct tcache_perthread_struct
 
 - 若我们控制了`counts`，对指定地方大小的`count`设置为7，则再次分配该大小的`chunk`时，就不会分配到`tcache`中。例如可以分配一个`unsorted chunk`来泄露`libc`。
 - 若我们控制了`entries`，相当于实现了任意大小的`chunk`的`tcache poisoning`，即可以在任意地址分配`chunk`，威力巨大。
+
+
+
+50： 20 30
+
+60： 40 50
+
+70：60 70
+
+80： 80 90

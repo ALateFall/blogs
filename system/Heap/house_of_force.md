@@ -17,6 +17,16 @@ Heap基础知识
 - 你需要可以`malloc`一个特别大的值
 - 你需要可以多次`malloc`
 
+**公式**：
+
+```c
+request_size = new_top_chunk_addr - old_top_chunk_addr - 0x10;
+
+// 其中request_size为malloc的大小
+// new_top_chunk_addr是申请后top chunk会处于的位置
+// old_top_chunk_addr是申请前top chunk会处于的位置
+```
+
 **原理：**
 
 在`glibc 2.23`中，对于`top chunk`的检查仅仅只有`(unsigned long) (size) >= (unsigned long) (nb + MINSIZE)`。
@@ -98,5 +108,3 @@ int main()
     return 0;
 }
 ```
-
-# 

@@ -11,7 +11,11 @@ Heap基础知识
 
 一句话，`unsafe unlink`漏洞是：控制相邻两个`chunk`的`prev size`和`prev_inuse`和`fd bk`等字段的值，以及攻击者明确存放这些`chunk`的地址的指针时，使得程序对不正确的位置进行`unlink`，从而达到任意地址写的目的。
 
-**注意，`small bin`和`fastbin `不会使用`unlink`。**
+**注意，`small bin`和`fastbin `正常情况下不会使用`unlink`。**
+
+**但实际上，只是因为若是fastbin或者smallbin或者tcachebin，不会设置下一个chunk的prev_size和prev_inuse位罢了。**
+
+**若我们设置了这两个位，同样可以对fastbin、smallbin、tcache进行unlink，从而构造重叠指针等。**
 
 接下来，我们一步步地看，第一步需要明确什么是正常的`unlink` 。
 

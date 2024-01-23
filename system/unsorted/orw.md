@@ -122,6 +122,70 @@ mov rcx, [0x5630f8b0a8];
 // 我们知道0x5630f8b0a8处的内容为retn，那么会pop rip,程序开始执行orw_gadgets。
 ```
 
+## glibc 2.29
+
+该版本开始，`setcontext`中使用的就不是`rdi`来对寄存器进行设置了，而是使用的`rdx`。因此从这个版本开始，需要使用额外的`gadget`来通过`rdi`控制`rdx`，后面的步骤不变。这个版本的`setcontext`为：
+
+```assembly
+.text:0000000000055E35                 mov     rsp, [rdx+0A0h]
+.text:0000000000055E3C                 mov     rbx, [rdx+80h]
+.text:0000000000055E43                 mov     rbp, [rdx+78h]
+.text:0000000000055E47                 mov     r12, [rdx+48h]
+.text:0000000000055E4B                 mov     r13, [rdx+50h]
+.text:0000000000055E4F                 mov     r14, [rdx+58h]
+.text:0000000000055E53                 mov     r15, [rdx+60h]
+.text:0000000000055E57                 mov     rcx, [rdx+0A8h]
+.text:0000000000055E5E                 push    rcx
+.text:0000000000055E5F                 mov     rsi, [rdx+70h]
+.text:0000000000055E63                 mov     rdi, [rdx+68h]
+.text:0000000000055E67                 mov     rcx, [rdx+98h]
+.text:0000000000055E6E                 mov     r8, [rdx+28h]
+.text:0000000000055E72                 mov     r9, [rdx+30h]
+.text:0000000000055E76                 mov     rdx, [rdx+88h]
+.text:0000000000055E7D                 xor     eax, eax
+.text:0000000000055E7F                 retn
+```
+
+`glibc2.29`下一般使用这个`gadget`：
+
+```assembly
+mov rdx, qword ptr [rdi + 8]; mov rax, qword ptr [rdi]; mov rdi, rdx; jmp rax;
+```
+
+## glibc 2.30
+
+同样，但这个版本使用的`gadget`一般为：
+
+```assembly
+mov rdx, qword ptr [rdi + 8]; mov qword ptr [rsp], rax; call qword ptr [rdx + 0x20];
+```
+
+此外也可能是`setcontext+61`，`setcontext+61`为：
+
+```assembly
+.text:000000000005803D                 mov     rsp, [rdx+0A0h] *
+.text:0000000000058044                 mov     rbx, [rdx+80h]
+.text:000000000005804B                 mov     rbp, [rdx+78h]
+.text:000000000005804F                 mov     r12, [rdx+48h]
+.text:0000000000058053                 mov     r13, [rdx+50h]
+.text:0000000000058057                 mov     r14, [rdx+58h]
+.text:000000000005805B                 mov     r15, [rdx+60h]
+.text:0000000000058126                 mov     rcx, [rdx+0A8h] * 
+.text:000000000005812D                 push    rcx             *
+.text:000000000005812E                 mov     rsi, [rdx+70h]
+.text:0000000000058132                 mov     rdi, [rdx+68h]
+.text:0000000000058136                 mov     rcx, [rdx+98h]
+.text:000000000005813D                 mov     r8, [rdx+28h]
+.text:0000000000058141                 mov     r9, [rdx+30h]
+.text:0000000000058145                 mov     rdx, [rdx+88h]
+.text:000000000005814C                 xor     eax, eax
+.text:000000000005814E                 retn
+```
+
+## glibc2.31
+
+这个版本的`gadget`和上面一样，但是变为了`setcontext+61`
+
 # 通过_environ获取栈地址
 
 在`orw`时，除了可以通过`setcontext`以外，还可以通过`_environ`来获得栈地址。`libc`中的`_environ`中存放了一个栈地址，该栈地址中存放的是环境变量的地址，因此知道`libc`地址的情况可以通过`_environ`来获取栈的地址，从而控制程序执行流。如下所示：
