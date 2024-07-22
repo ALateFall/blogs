@@ -193,7 +193,6 @@ if __name__ == '__main__':
 
 ![image-20221211230812095](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202311211724326.png)
 
-可以看到，`puts_got`的地址是`0x601018`。这个是没问题的，但`push`那个地址本来应该是`0`，但不知道怎么变成了`0A0A00`，有两个`0`变成`a`了，这个希望有师傅解答一下。
 
 ## exp
 
