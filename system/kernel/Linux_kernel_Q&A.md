@@ -1,4 +1,16 @@
+---
+layout: post
+title: excluded
+category: system/kernel
+date: 2024-7-20 14:00:00
+exclude: true
+---
+
+Linux kernel基础：Kernel 
+
 [TOC]
+
+
 
 # Q & A
 
