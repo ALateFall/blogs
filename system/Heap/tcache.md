@@ -21,6 +21,8 @@ Heap基础知识
 
 值得注意的是，`tcache`指向的直接是用户地址，而不是之前`bin`指向的是`header`的地址。
 
+## tcache perthread struct
+
 对于`tcache`，`glibc`会在第一次申请堆块的时候创建一个`tcache_perthread_struct`的数据结构，同样存放在堆上。它的定义如下所示：
 
 ```C
@@ -35,15 +37,57 @@ typedef struct tcache_perthread_struct
 // 在glibc2.30及以上版本中，counts的大小为2个字节，因此tcache_perthread_struct的大小为2*64 + 8*64 = 0x290(with header)
 ```
 
-## tcache poisoning
+## tcache poisoning及其变迁
+
+### glibc2.27低版本
 
 若存在`tcache`机制时，若申请一个属于`tcache`中的`chunk`，使用到的函数是`tcache_get()`函数，该函数在初始版本没有任何的安全机制，因此只需要简单地将某个`tcache`中的`chunk`的`fd`指针修改为想要分配到的地方，即可在目标地址申请一个`chunk`。
+
+### glibc2.27高版本-glibc2.29
+
+在`glibc2.27`的高版本开始，`tcache chunk`的`bk`将不再为空，而是`tcache_perthread_struct`的用户地址。然而这和`tcache poisoning`没有任何关系，我们仍然可以没有任何限制地使用`tcache poisoning attack`。
+
+### glibc2.31
+
+在`glibc2.31`，`glibc`添加了对`tcache`的`count`的检查，即在对应`index`的`count`小于等于`0`时，无法从该`tcache`中申请`chunk`。这意味着我们在`tcache`中只有一个`chunk`时修改其`fd`指针来完成攻击，而是至少需要两个`chunk`位于同一个`tcache bin`中。
+
+总结：
+
+- 至少两个`chunk`位于同一个`tcache bin`（或者别的方式，总之有`count`检查）
+
+### glibc2.32-glibc2.38
+
+自从`glibc2.32`开始，`glibc`引入了相当多对于`tcache`的检查。我们这里只说`poisoning`，不说`double free`，这一部分在后面。
+
+首先，`tcache bin`会检查待申请的地址是否对齐，即末位是否为`0`。若不为`0`，则会报错。
+
+其次，`tcache`的`fd`指针将会被加密。假设要申请的地址为`target`，`chunk`的用户地址为`address`，则：
+
+```c
+chunk->fd = target ^ (address >> 12);
+```
+
+值得注意的是，在`glibc2.27`高版本到`glibc2.33`，我们**可以通过泄露`bk`的方式来获得堆地址。**
+
+总结：
+
+- 至少两个`chunk`位于同一个`tcache bin`（或者别的方式，总之有`count`检查）
+- 待申请地址必须对齐
+- `chunk -> fd = target ^ (address >> 12)`
 
 ## tcache double free
 
 若没有`tcache`的时候，`double free`不能简单地连续对一个`chunk`进行`free`两次这个机制略显复杂的话，那么`tcache double free`就显得单纯许多了。在初始版本下`tcache`的释放操作是使用的`tcache_get()`函数，该函数同样没有任何安全机制，因此可以简单地直接对一个`chunk`进行两次`free`，因此可以申请回该`chunk`，对其修改后再次申请，完成任意地址写/任意地址`chunk`分配的目的。
 
-要注意的是，`glibc`在后来的版本中，在`tcache`的数据结构中添加了`key`，会一定程度上防止`double free`的发生。这个后面再补。
+### 高版本
+
+从`glibc2.27`高版本开始简单的`tcache double free`已经成为了历史。
+
+`patch`方式为`tcache chunk`的`bk`指针处将会有一个`key`，对于每一个释放的`chunk`，若其`bk`指针等于其`key`，说明该`chunk`属于`tcache`，便会循环`tcache`来遍历检查其是否已经位于`tcache`。因此若你能修改其`bk`指针为任意值（只要不等于`key`），也可以进行`double free`。（或者你可以尝试`house of botcake`）
+
+- 在`glibc2.27`高版本-`glibc2.33`，`tcache`的`key`为`tcache_perthread_struct`的用户地址。
+
+- 在`glibc2.33-glibc2.38`，`tcache`的`key`为随机数。
 
 ## tcache house of spirit
 
@@ -97,13 +141,3 @@ typedef struct tcache_perthread_struct
 
 - 若我们控制了`counts`，对指定地方大小的`count`设置为7，则再次分配该大小的`chunk`时，就不会分配到`tcache`中。例如可以分配一个`unsorted chunk`来泄露`libc`。
 - 若我们控制了`entries`，相当于实现了任意大小的`chunk`的`tcache poisoning`，即可以在任意地址分配`chunk`，威力巨大。
-
-
-
-50： 20 30
-
-60： 40 50
-
-70：60 70
-
-80： 80 90

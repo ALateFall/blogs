@@ -238,7 +238,7 @@ The bk pointer points to the chunk freed after it.
 
 这说明：
 
-- 其和`unsortedbin`的管理机制基本一样，只是`unsortedbin`只有一条链，而`smallbin`根据大小不同，有很多链。
+- 其和`unsortedbin`的管理机制基本一样，同样为`FIFO`，只是`unsortedbin`只有一条链，而`smallbin`根据大小不同，有很多链。
 - `smallbin`的`fd`指针指向比他先释放的`chunk`，而`bk`指针指向比它后释放的`chunk`。
 - `fd`和`bk`指针都会指向`main_arena`，因此最先释放的`chunk`的`fd`指针将会指向`main_arena`，而最后释放的`chunk`的`bk`指针会指向`main_arena`。
 - 从链表头插入，从链表尾取出

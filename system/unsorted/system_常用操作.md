@@ -235,3 +235,19 @@ ln -s source_file soft _link
 如图所示，应用结构体后即可使用结构体的方式在反编译后的代码中显示。
 
 ![image-20231113131752853](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202311131317899.png)
+
+# 上传包到pip
+
+使用如下命令构建包，会生成文件到`dist`：
+
+```bash
+python3 setup.py sdist bdist_wheel
+```
+
+使用如下命令上传到`pip`：
+
+```bash
+twine upload dist/*
+```
+
+会要求输入`API`。若更新，需要更新`setup.py`中的版本号。

@@ -11,7 +11,7 @@ Heap基础知识
 
 一句话，`unsafe unlink`漏洞是：控制相邻两个`chunk`的`prev size`和`prev_inuse`和`fd bk`等字段的值，以及攻击者明确存放这些`chunk`的地址的指针时，使得程序对不正确的位置进行`unlink`，从而达到任意地址写的目的。
 
-**注意，`small bin`和`fastbin `正常情况下不会使用`unlink`。**
+**注意，一般来说`small bin`和`fastbin `正常情况下不会使用`unlink`。**
 
 **但实际上，只是因为若是fastbin或者smallbin或者tcachebin，不会设置下一个chunk的prev_size和prev_inuse位罢了。**
 
@@ -45,16 +45,16 @@ Heap基础知识
         // 通过上面的安全检查了，那接下来就进行unlink。 若是使用bk或者fd指针的chunk，那么下面两行后就结束了。
         FD->bk = BK; // 将FD的后向连接到BK 							      
         BK->fd = FD; // 将BK的前向连接到FD						
-        // 假如连接方式不是bk和fd指针，那就需要判断是不是用的fd_nextsize或者bk_nextsize指针。	      
+		// 后文是largebin范围内的额外操作      
         if (!in_smallbin_range (P->size)				      
-            && __builtin_expect (P->fd_nextsize != NULL, 0)) {  // 这个if判断1.不是smallbin(fd/bk)2.有用到fd_nextsize    
+            && __builtin_expect (P->fd_nextsize != NULL, 0)) {  
               if (__builtin_expect (P->fd_nextsize->bk_nextsize != P, 0)	      
-            || __builtin_expect (P->bk_nextsize->fd_nextsize != P, 0)) // 安全检查：P的后向的前向确实为P，和本宏第一个if作用类似。利用漏洞需要突破这个    
+            || __builtin_expect (P->bk_nextsize->fd_nextsize != P, 0)) 
                 malloc_printerr (check_action,				      
                     "corrupted double-linked list (not small)",    
                     P, AV);				      
-                    if (FD->fd_nextsize == NULL) {		// 这里有点没懂为啥是FD的前向
-                          if (P->fd_nextsize == P) // 假如P的前向还是P，说明这个链表就P一个，后面暂时没看懂		     
+                    if (FD->fd_nextsize == NULL) {		
+                          if (P->fd_nextsize == P)
                             FD->fd_nextsize = FD->bk_nextsize = FD;	
                           else {							      
                               FD->fd_nextsize = P->fd_nextsize;			      
@@ -62,8 +62,7 @@ Heap基础知识
                               P->fd_nextsize->bk_nextsize = FD;			      
                               P->bk_nextsize->fd_nextsize = FD;			      
                             }							      
-                      } else {
-                        // unlink的正常操作							      
+                      } else {						      
                         P->fd_nextsize->bk_nextsize = P->bk_nextsize;		      
                         P->bk_nextsize->fd_nextsize = P->fd_nextsize;		      
                       }								      

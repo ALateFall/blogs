@@ -364,7 +364,7 @@ int main()
 最后，我们总结一下使用`stdin`进行任意写的条件，以供快速查阅：
 
 - `fp -> _IO_read_end == fp -> _IO_read_ptr`，偏移分别为`0x10`和`0x8`
-- `fp -> _flags & _IO_NO_READS`为假，由于`_IO_NO_READS`为`4`，那么需要设置倒数第二字节为`0`.
+- `fp -> _flags & _IO_NO_READS`为假，由于`_IO_NO_READS`为`4`，那么需要设置倒数第二字节为`0`. 
 - `fp -> _fileno == 0`，其偏移为`0x70`
 - `fp -> _IO_buf_base`和`fp -> _IO_buf_end`指向要通过`read`写入的位置，且要略大于要读入的字节数。偏移为`0x38`和`0x40`。
 - 调用从文件输入的一些函数例如`fread`、`fgets`

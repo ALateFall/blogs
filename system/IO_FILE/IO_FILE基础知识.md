@@ -50,6 +50,33 @@ _unused2 = {0x0 <repeats 20 times>} // 0xc4 大小0x14
 vtable = 0x7ffff7dd06e0 // 0xd8
 ```
 
+## _IO_wide_data结构体
+
+```c
+// 同样是随便找了个，用来查看偏移而已
+{
+  _IO_read_ptr = 0, // 偏移0x0
+  _IO_read_end = 0x0, // 偏移0x8
+  _IO_read_base = 0x0, // 偏移0x10
+  _IO_write_base = 0x0, // 偏移0x18
+  _IO_write_ptr = 0x0, // 偏移0x20
+  _IO_write_end = 0x0, // 偏移0x28
+  _IO_buf_base = 0x0, // 偏移0x30
+  _IO_buf_end = 0x0, // 偏移0x38
+  _IO_save_base = 0x0, // 偏移0x40
+  _IO_backup_base = 0x0, // 偏移0x48
+  _IO_save_end = 0x0, // 偏移0x50
+  _IO_state = {...}, // 偏移0x58
+  _IO_last_state = {...}, // 偏移0x60
+  _codecvt = {...}, // 偏移0x68
+  _shortbuf = "", // 偏移0xd8
+  _wide_vtable = 0x0 // 偏移0xe0
+}
+
+```
+
+
+
 # IO_FILE利用链总结
 
 ## printf利用链 -- glibc2.23

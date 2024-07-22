@@ -33,10 +33,11 @@ Heap基础知识
 
 - 能够对一个`large bin`中的`chunk1`进行任意写
 - 从`unsorted bin`中有一个正常`chunk2`释放到`large bin`
+- `largebin chunk`中的`bk`指向要修改的地址一减去`0x10`，而`bk_nextsize`指向要修改的地址二减去`0x20`
 
 攻击能完成的结果：
 
-- 将一个攻击者指定的地址的值修改为一个非常大的值，即一个`heap`的地址。
+- 将上面指定的地址一和地址二修改为堆地址
 
 正常情况下，若用户使用`malloc`申请了一个`large chunk`，那么`ptmalloc2`会进行如下操作：
 

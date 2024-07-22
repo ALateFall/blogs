@@ -63,9 +63,40 @@ int openat(int dirfd, const char *pathname, int flags, ...);
 
 只需要写`openat(0, '/flag\x00')`的形式即可
 
+# 不知道文件名
+
+可以使用`getdents`系统调用。先使用`open(path, 0x10000)`打开目录，然后使用如下方式将其读入到`buf`：
+
+```c
+getdents(int fd, char* buf, int length);
+```
+
 # write函数/read函数
 
 这两个函数比较常用，此处不再赘述。
+
+# writev系统调用
+
+可以代替`write`。其中：
+
+```c
+ssize_t writev(int fd, const struct iovec *iov, int iovcnt);
+fd：要写入数据的文件描述符。
+iov：指向一个iovec结构数组的指针，每个结构包含一个指向数据缓冲区的指针和该缓冲区的长度。
+iovcnt：iovec结构数组中元素的数量。
+```
+
+由此，例如我需要输出`0x80000`处的长度为`0x100`的数据，我可以先在堆上构造这个`iovec`结构体：
+
+```c
+payload = p64(0x80000) + p64(0x100)
+```
+
+假设构造的这个`payload`位于地址`heap_base + 0x360`，那么使用`writev`如下即可：
+
+```c
+writev(1, heap_base + 0x360, 1)
+```
 
 # setcontext函数
 

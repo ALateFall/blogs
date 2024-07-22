@@ -8,8 +8,21 @@
 /system/format_string/format_string.md
 /system/write_up
 /system/tasks.md
-/system/Heap
 /system/heap/bins链表管理机制_图片.pptx
 # /system/Heap/heap - 副本.md
 # /system/IO_FILE/IO_FILE - 副本.md
 # /system/StackOverflow/stack - 副本.md
+system/AWD/加固总结.pdf
+system/AWD/hello_ctf.pdf
+system/AWD/roderick_heap.pdf
+system/AWD/roderick_house_of.pdf
+system/AWD/roderick_shellcode.pdf
+system/AWD/seccomp_colin_1.pdf
+system/AWD/seccomp_colin_2.pdf
+system/tricks/图解.pptx
+system/ranks.md
+system/0x401/寒假进度/寒假进度.md
+system/0x401/新生赛复现/新生赛复现.md
+system/AWD/syscall.md
+system/Heap/glibc2.27以上的堆利用.md
+system/multiarch/16-bit.md
