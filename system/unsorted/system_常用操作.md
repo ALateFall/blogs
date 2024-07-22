@@ -1,7 +1,7 @@
 ---
 layout: post
 title: Linux下的一些基础知识小记
-category: system/unsorted
+category: unsorted
 date: 2023-9-18 12:00:00
 ---
 Linux
