@@ -1,7 +1,7 @@
 ---
 layout: post
 title: 一步一步配置wsl2 for pwn
-category: system/tricks
+category: tricks
 date: 2024-05-01 12:00:00
 ---
 wsl2

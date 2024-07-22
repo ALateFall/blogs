@@ -1,10 +1,11 @@
 ---
 layout: post
 title: 0x03. Linux kernel基础：条件竞争
-category: system/kernel
+category: kernel pwn
 date: 2024-7-20 15:00:00
 ---
-Linux kernel基础：条件竞争
+一位Web大师曾经告诉我：看似完全没有漏洞的题目就是在考条件竞争...
+<!-- more -->
 
 [toc]
 

@@ -1,7 +1,7 @@
 ---
 layout: post
-title: 你不得不知道的use after free
-category: system/Heap
+title: use after free
+category: Heap
 date: 2023-9-23 21:04:32
 ---
 Heap基础知识

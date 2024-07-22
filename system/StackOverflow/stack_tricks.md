@@ -1,7 +1,7 @@
 ---
 layout: post
-title: 栈溢出经典trick大全（更新中）
-category: system/StackOverflow
+title: 栈溢出trick
+category: StackOverflow
 date: 2023-9-20 12:00:00
 ---
 栈溢出基础知识点

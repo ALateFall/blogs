@@ -1,7 +1,7 @@
 ---
 layout: post
 title: house of orange：一种不需要free的堆利用方式
-category: system/IO_FILE
+category: Heap
 date: 2023-11-09 20:39:36
 updated: 2023-11-20 15:03:00
 ---

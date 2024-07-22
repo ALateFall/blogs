@@ -1,13 +1,12 @@
 ---
 layout: post
 title: excluded
-category: system/kernel
+category: kernel pwn
 date: 2024-7-20 14:00:00
 exclude: true
 ---
-
 Linux kernel基础：Kernel 
-
+<!-- more -->
 [TOC]
 
 

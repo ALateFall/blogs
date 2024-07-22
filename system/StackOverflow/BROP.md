@@ -1,7 +1,7 @@
 ---
 layout: post
 title: BROP(Blind ROP)
-category: system/StackOverflow
+category: StackOverflow
 date: 2023-9-21 12:00:00
 ---
 BROP的基础流程

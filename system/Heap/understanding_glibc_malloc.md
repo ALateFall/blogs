@@ -1,7 +1,7 @@
 ---
 layout: post
 title: 经典文章阅读：Understanding glibc malloc
-category: system/Heap
+category: Heap
 date: 2023-9-23 21:55:29
 ---
 对经典文章Understanding glibc malloc的阅读笔记&夹带自己理解的翻译

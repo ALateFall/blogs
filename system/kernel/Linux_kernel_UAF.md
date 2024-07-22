@@ -4,8 +4,8 @@ title: 0x02. Linux kernel基础：Kernel UAF
 category: system/kernel
 date: 2024-7-20 14:00:00
 ---
-Linux kernel基础：Kernel UAF
-
+我的fastbin呢？
+<!-- more -->
 [toc]
 
 # Linux Kernel UAF漫谈

@@ -1,7 +1,7 @@
 ---
 layout: post
 title: house of lore：一种“smallbin attack”
-category: system/Heap
+category: Heap
 date: 2023-9-23 21:04:32
 ---
 Heap基础知识

@@ -1,7 +1,7 @@
 ---
 layout: post
-title: gadgets不够用？或许你该看看ret2csu！
-category: system/StackOverflow
+title: ret2csu！
+category: StackOverflow
 date: 2023-9-20 12:00:00
 ---
 ret2csu简单记录

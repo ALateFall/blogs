@@ -1,7 +1,7 @@
 ---
 layout: post
-title: 你应该了解的ret2libc及延迟绑定机制
-category: system/StackOverflow
+title: ret2libc
+category: StackOverflow
 date: 2023-9-20 12:00:00
 ---
 ret2libc

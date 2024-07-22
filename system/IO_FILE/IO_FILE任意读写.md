@@ -1,7 +1,7 @@
 ---
 layout: post
 title: IO_FILE之stdin和stdout的任意读写(glibc2.23-Latest)
-category: system/IO_FILE
+category: Heap
 date: 2023-11-20 20:39:36
 updated: 2023-11-20 15:03:00
 ---

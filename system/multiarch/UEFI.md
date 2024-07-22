@@ -1,11 +1,11 @@
 ---
 layout: post
 title: UEFI pwn初探
-category: system/multiarch
+category: multiarch
 date: 2024-7-18 13:00:00
 ---
 UEFI pwn初探
-
+<!-- more -->
 [toc]
 
 # UEFI PWN

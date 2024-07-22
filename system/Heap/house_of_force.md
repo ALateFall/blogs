@@ -1,7 +1,7 @@
 ---
 layout: post
 title: house of force：控制top chunk的size来malloc任意值
-category: system/Heap
+category: Heap
 date: 2023-9-23 21:04:32
 ---
 Heap基础知识

@@ -1,7 +1,7 @@
 ---
 layout: post
 title: glibc做题思路
-category: system/Heap
+category: Heap
 date: 2023-9-27 18:38
 ---
 

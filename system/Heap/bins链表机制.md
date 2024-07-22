@@ -1,7 +1,7 @@
 ---
 layout: post
 title: glibc中的bins链表详解
-category: system/Heap
+category: Heap
 date: 2023-12-25 15:48:32
 ---
 

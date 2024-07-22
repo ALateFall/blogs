@@ -1,11 +1,11 @@
 ---
 layout: post
 title: Rust语法基础学习
-category: system/tricks
+category: multiarch
 date: 2024-04-01 12:00:00
 ---
-Rust语法基础学习
-
+螃蟹好吃捏
+<!-- more -->
 [toc]
 
 # Rust

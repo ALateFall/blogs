@@ -1,7 +1,7 @@
 ---
 layout: post
 title: 栈溢出最基本的ret2xxx
-category: system/StackOverflow
+category: StackOverflow
 date: 2023-9-20 12:00:00
 ---
 栈溢出基础知识点

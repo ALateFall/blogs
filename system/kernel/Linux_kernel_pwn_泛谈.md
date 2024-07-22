@@ -1,11 +1,11 @@
 ---
 layout: post
 title: 0x01. Linux kernel基础：Kernel ROP
-category: system/kernel
+category: kernel pwn
 date: 2024-7-20 13:00:00
 ---
-Linux kernel基础：Kernel ROP
-
+Kernel会不会梦到用户态ROP
+<!-- more -->
 [toc]
 
 # 初探Kernel ：Linux kernel pwn之Kernel ROP

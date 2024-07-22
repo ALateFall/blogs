@@ -1,7 +1,7 @@
 ---
 layout: post
 title: IO_FILE基础知识小结
-category: system/IO_FILE
+category: Heap
 date: 2023-11-09 20:39:36
 updated: 2023-11-20 15:03:00
 ---

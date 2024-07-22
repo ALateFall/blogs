@@ -1,7 +1,7 @@
 ---
 layout: post
-title: 除你execve：ORW(Open-Read-Write)小记
-category: system/unsorted
+title: ORW(Open-Read-Write)小记
+category: tricks
 date: 2023-9-21 12:00:00
 ---
 ORW

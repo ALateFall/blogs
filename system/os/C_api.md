@@ -1,7 +1,7 @@
 ---
 layout: post
 title: C语言API小结
-category: system/os
+category: os
 date: 2023-8-20 12:00:00
 ---
 主要是在学习NJU的OS时遇到的一些C语言API。仅以小结。

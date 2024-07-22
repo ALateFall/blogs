@@ -1,10 +1,11 @@
 ---
 layout: post
 title: CTF-PWN做题的思路小记
-category: system/tricks
-date: 2023-12-28 12:00:00
+category: tricks
+date: 2023-12-28 12:00
 ---
-栈溢出基础知识点
+没有什么是真正的Trick
+
 <!-- more -->
 
 [toc]

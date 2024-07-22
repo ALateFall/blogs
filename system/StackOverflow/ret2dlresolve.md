@@ -1,11 +1,11 @@
 ---
 layout: post
 title: ret2dlresolve小记
-category: system/StackOverflow
+category: StackOverflow
 date: 2024-06-05 12:00:00
 ---
-ret2dlresolve小记
-
+愣着干嘛，打板子啊
+<!-- more -->
 [toc]
 
 本文写于`2024.6.5`。

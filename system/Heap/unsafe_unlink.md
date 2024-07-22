@@ -1,7 +1,7 @@
 ---
 layout: post
 title: unlink及unsafe unlink详谈分析
-category: system/Heap
+category: Heap
 date: 2023-9-23 21:04:32
 ---
 Heap基础知识
