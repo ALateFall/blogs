@@ -1,7 +1,7 @@
 ---
 layout: post
 title: 0x02. Linux kernel基础：Kernel UAF
-category: system/kernel
+category: kernel pwn
 date: 2024-7-20 14:00:00
 ---
 我的fastbin呢？
