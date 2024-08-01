@@ -7,6 +7,7 @@ exclude: true
 ---
 Linux kernel基础：Kernel 
 <!-- more -->
+
 [TOC]
 
 
@@ -132,9 +133,37 @@ $ cat gadgets.txt| grep -E '.*: pop ... ; pop ... ; pop ... ; ret$'
 
 如上，我们利用`.*: `匹配了前面地址部分，随后多次使用`pop ...`表示`pop`一个寄存器，最后`ret`后面使用`$`表示匹配结尾。
 
+## 0x05. 内核崩溃时卡死 qemu不退出或重启
 
+注意`qemu`启动脚本中，`-append`的如下选项：
 
+```c
+panic=1 oops=panic
+```
 
+开启之后即可让内核崩溃时触发`panic`。
 
+而`panic`之后，若设置了`-no-reboot`则不会重启内核。
 
+## 0x06. 通过内核堆上泄露程序基地址
+
+内核堆地址`+0x9d000`处存放了函数`secondary_startup_64`函数的地址，可以通过该函数地址泄露程序基地址
+
+## 0x07. 寻找modprobe_path地址
+
+我们无法通过`cat /proc/kallsyms`来找到`modprobe_path`的地址。幸运的是，在`__request_module`中，存在一个对`modprobe_path`的引用。由此，我们可以从`/proc/kallsyms`中找到`__request_module`函数的地址，并使用`gdb`连接到`kernel`，查看该函数附近的汇编代码，即可找到`modprobe_path`的地址~
+
+具体如下：
+
+首先我们找到`__request_module`函数的地址：
+
+![QQ_1722493258038](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202408011511350.png)
+
+随后，我们让`gdb`连接到该`kernel`，设置`target remote:1234`即可，通过`x/40i`来查看刚刚获得的函数地址附近的代码：
+
+![QQ_1722493343591](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202408011511409.png)
+
+如上所示，箭头所指的地方就是`modprobe_path`的地址的引用。
+
+通过如上方式，我们就可以获得`modprobe_path`的地址。
 

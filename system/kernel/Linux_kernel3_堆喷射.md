@@ -71,7 +71,7 @@ key_serial_t add_key(const char *type, const char *description,
 
 而简单来说，通过`add_key`可以为用户申请密钥，而一个密钥包括类型、`description`描述、`payload`内容、`plen`内容长度。
 
-而由于我们此处为`Linux kernel pwn`相关利用，因此其原本的方式我们不多过赘述。
+而由于我们此处为`Linux kernel pwn`相关利用，因此其原本的作用我们不多过赘述。
 
 使用`add_key`总共会申请若干个结构体，我们按照流程如下：
 
