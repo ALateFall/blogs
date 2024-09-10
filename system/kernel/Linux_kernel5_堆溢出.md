@@ -5,7 +5,7 @@ category: kernel pwn
 date: 2024-9-1 15:00:00
 ---
 
-这个我熟，tcache poisoning
+啊？
 <!-- more -->
 
 [toc]
