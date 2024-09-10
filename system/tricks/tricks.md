@@ -12,6 +12,201 @@ date: 2023-12-28 12:00
 
 以下内容都是做题的时候遇到的一些知识点，但是由于时间原因，不可能详细记录每道题的详细解法，因此将这些题目的`trick`进行一个简要的总结。
 
+# mp_.tcache_bins攻击
+
+## 介绍
+
+这里先介绍一下`mp_.tcache_bins`，想快速知道利用方式的师傅可以直接到**利用方式**小节。
+
+首先咱们需要将`mp_.tcache_bins`和`#define TCACHE_MAX_BINS 64`做区分：
+
+- 前者是`mp_`结构体里的一个变量，可写，可以在`gdb`里使用`p mp_`来查看其结构体
+- 后者是源码中一个宏定义，我们毫无疑问是无法修改的
+
+而若我们调用`malloc`，其会经历如下流程：
+
+```c
+# define csize2tidx(x) (((x) - MINSIZE + MALLOC_ALIGNMENT - 1) / MALLOC_ALIGNMENT)
+
+void *
+__libc_malloc (size_t bytes)
+{
+  // ...
+  size_t tc_idx = csize2tidx (tbytes);
+  // ...
+  if (tc_idx < mp_.tcache_bins
+      && tcache != NULL
+      && tcache->counts[tc_idx] > 0)
+    {
+      victim = tcache_get (tc_idx);
+      return tag_new_usable (victim);
+    }
+  // ...
+}
+
+static __always_inline void *
+tcache_get (size_t tc_idx)
+{
+  return tcache_get_n (tc_idx, & tcache->entries[tc_idx]);
+}
+
+/// ...
+static __always_inline void *
+tcache_get_n (size_t tc_idx, tcache_entry **ep)
+{
+  tcache_entry *e;
+  if (ep == &(tcache->entries[tc_idx]))
+    e = *ep;
+  else
+    e = REVEAL_PTR (*ep);
+
+  if (__glibc_unlikely (!aligned_OK (e)))
+    malloc_printerr ("malloc(): unaligned tcache chunk detected");
+
+  if (ep == &(tcache->entries[tc_idx]))
+      *ep = REVEAL_PTR (e->next);
+  else
+    *ep = PROTECT_PTR (ep, REVEAL_PTR (e->next));
+
+  --(tcache->counts[tc_idx]);
+  e->key = 0;
+  return (void *) e;
+}
+
+
+// ...
+# define TCACHE_MAX_BINS		64
+// ...
+static struct malloc_par mp_ =
+{
+  .top_pad = DEFAULT_TOP_PAD,
+  .n_mmaps_max = DEFAULT_MMAP_MAX,
+  .mmap_threshold = DEFAULT_MMAP_THRESHOLD,
+  .trim_threshold = DEFAULT_TRIM_THRESHOLD,
+#define NARENAS_FROM_NCORES(n) ((n) * (sizeof (long) == 4 ? 2 : 8))
+  .arena_test = NARENAS_FROM_NCORES (1)
+#if USE_TCACHE
+  ,
+  .tcache_count = TCACHE_FILL_COUNT,
+  .tcache_bins = TCACHE_MAX_BINS,
+  .tcache_max_bytes = tidx2usize (TCACHE_MAX_BINS-1),
+  .tcache_unsorted_limit = 0 /* No limit.  */
+#endif
+};
+```
+
+能看到，`TCACHE_MAX_BINS`只有在`mp_`结构体初始化时对其进行赋值，而后面`glibc`运行时完全基于`mp_.tcache_bins`进行利用。
+
+再详细查看`malloc`利用流程，可以看到，`malloc`任意一个大小时，其都会被先当作`tcache`，计算出其`tc_idx`。而当`tc_idx`小于`mp_.tcache_bins`时，就会将该`chunk`当作`tcache`中的`chunk`，进而从`tcache_perthread_struct`中的`entries`中指定的地址中取出。
+
+由此，正常情况下，`mp_.tcache_bins`为`64`，因此只有`size`小于等于`0x410`会经历上述流程。
+
+但若我们攻击了`mp_.tcache_bins`，改变其值为一个非常大的值（例如`largebin attack`），那么在申请更大的`chunk`时，便会同样先计算其`tc_idx`，而此时`tc_idx`将小于`mp_.tcache_bins`，从而判定其属于`tcache`。此时只要其对应的`count`大于`0`，那么我们便可以将原本`tcache_perthread_struct`下面的一个`chunk`的内容也当作`entries`部分，合理控制上面的值可以达到任意地址写的目的。
+
+## 利用方式
+
+假设原本`tcache_perthread_struct`如下所示：
+
+```c
++0000 0x55555555b000  00 00 00 00 00 00 00 00  91 02 00 00 00 00 00 00 <- tcache_perthread_struct
++0010 0x55555555b010  01 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00 <- count开始
++0020 0x55555555b020  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00
+... ↓            skipped 4 identical lines (64 bytes)
++0070 0x55555555b070  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00
++0080 0x55555555b080  00 00 00 00 00 00 00 00  00 00 00 00 07 00 00 00
++0090 0x55555555b090  30 de 55 55 54 55 00 00  00 00 00 00 00 00 00 00 <- entrires开始
++00a0 0x55555555b0a0  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00
+... ↓            skipped 28 identical lines (448 bytes)
++0270 0x55555555b270  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00
++0280 0x55555555b280  d0 ca 55 55 55 55 00 00  00 00 00 00 00 00 00 00
++0290 0x55555555b290  00 00 00 00 00 00 00 00  31 00 00 00 00 00 00 00 <- 第一个chunk
++02a0 0x55555555b2a0  c0 f5 fa f7 ff 7f 00 00  20 eb fa f7 ff 7f 00 00
+```
+
+在假设我们已经控制了`mp_.tcache_bins`为特别大的值，那么：
+
+- `count`和`entris`的**起始位置不变**，但现在可以**越界写**
+
+这意味着，上面第一个`chunk`中的`0x55555555b2a0`处的内容将会被当作是`tcache_perthread_struct.entries`的内容，经过计算刚好为`size`等于`0x440`时的内容。
+
+而其`count`，只要释放一个`size`为`0x20`的地方，即可将`entries`中为`0x20`的地方（起始处）写上一个值，而该值又被`tcache_perthread_struct`的`count`来越界读，将该值误认为是`0x420-0x440`的`count`。因此，只要直接申请`size=0x440`的`chunk`，即可申请到我们可控的第一个`chunk`中的内容。
+
+总结如下：
+
+- 控制`mp_.tcache_bins`为大值
+- `count`和`entris`的**起始位置不变**，但现在可以**越界写**
+- 释放`size`为`0x20`的`chunk`，这使得`0x420-0x440`的`count`不为`0`
+- `0x420-0x440`对应除了`tcache_perthread_struct`的第一个`chunk`中的内容，该内容可控
+- 将其内容布置为想要申请的地方即可任意地址申请
+
+# pwntools中调试子进程
+
+可以通过找到其`pid`，随后将`pid`的值加一来进行调试。如下所示：
+
+```python
+pid = util.proc.pidof(sh)[0]
+gdb.attach(pid+1)
+```
+
+# 高版本只有UAF无edit的情况下打largebin attack
+
+需要严格的堆风水。
+
+虽然我们可以利用`botcake`等方法来操作`largebin`或者`unsortedbin`，但是仍然难以打`largebin attack`。
+
+我们可以利用类似于`house of spirit`的方式来释放伪造的`unsortedbin chunk`（前提没有清空操作）
+
+例如，我们释放`A`和`B`到`unsortedbin`并合并，再申请一个`A+B`的`chunk`将这个合并的`chunk`申请回来。
+
+此时，我们可以释放`B`：但这样做的话，会导致下一个`chunk`的`prev_inuse`为`0`，这导致无法再释放`A`。
+
+因此，我们可以利用如下方式：
+
+- 释放`A`和`B`到`unsortedbin`并合并
+- 申请回合并的`chunk`，同时修改原本的`B`，将其`size`改小或者改大。注意控制下一个`chunk`的`prev_size`即可，最好是伪造出的`chunk header`。
+- 释放`B`，该操作不会导致任何已有的`prev_inuse`被设置
+- 释放`A`，此时`A+B`和`B`都位于`unsortedbin`。
+
+而若我们将原本的`B`的`size`改大，达到`A+原本B < 修改B`的情况，那么在`unsortedbin`中会导致，申请时会先切割`A+B`而不是`B`。这样就可以踩`libc`地址到`largebin chunk`(`B`)的`bk`处。若我们不使用该方法，则难以在`bk`踩出`libc`地址。
+
+# dl_fini：l_addr劫持
+
+在`glibc`调用`exit`函数时，函数会经过如下调用链：
+
+```c
+exit()
+    __run_exit_handlers()
+    	_di_fini()
+```
+
+而`_dl_fini`中，有如下部分代码：
+
+```c
+if (l->l_info[DT_FINI_ARRAY] != NULL)
+{
+  ElfW(Addr) *array = (ElfW(Addr) *) (l->l_addr + l->l_info[DT_FINI_ARRAY]->d_un.d_ptr);
+  unsigned int i = (l->l_info[DT_FINI_ARRAYSZ]->d_un.d_val / sizeof (ElfW(Addr)));
+  while (i-- > 0)
+    ((fini_t) array[i]) ();
+}
+```
+
+看似很复杂，但实际上逻辑很简单。看这一段：
+
+```c
+ElfW(Addr) *array = (ElfW(Addr) *) (l->l_addr + l->l_info[DT_FINI_ARRAY]->d_un.d_ptr);
+```
+
+该行计算出最后调用的函数指针数组的地址。
+
+然而，`l->l_addr`默认情况下为`0`，而`l->l_info[DT_FINI_ARRAY]->d_un.d_ptr`默认情况下为`.fini_array`的地址。
+
+这意味着，默认情况下该部分会执行`fini_array`部分的函数。
+
+然而，我们可以劫持`l->l_addr`：将其加上某个偏移，如此我们可以使得执行的函数不再是`fini_array`，而是加上偏移后的部分的函数，例如可以加上某个偏移使其执行`bss`上的地址的函数！
+
+
+
 # tcache伪造size位并分配到任意大小的tcache
 
 这是`tache`的一个缺陷，根据测试，直到`glibc2.38`，该`trick`仍然有效。
@@ -872,10 +1067,6 @@ ROPgadget --binary ./pwn | grep 'ebx'
 
 这些函数会在末尾补一个`\x00`，有的时候会有奇效（比如覆盖掉下一个变量）
 
-# add和edit是分开的情况
-
-若没有清零堆块，那么这种情况下`add`得到的`chunk`中可以含有各种残留的堆块指针和残留的`libc`地址，可以泄露或使用。
-
 # 继承suid程序
 
 若一个程序为`suid`程序，通过这个程序获得`shell`也可以继承，适用于程序为`suid`但是`flag`需要高权限的情况。
@@ -895,8 +1086,6 @@ mov edi, eax
 mov eax, 0x69
 syscall
 ```
-
-
 
 # 若存在alarm、close，则可以利用偏移得到syscall
 

