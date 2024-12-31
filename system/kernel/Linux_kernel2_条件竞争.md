@@ -161,7 +161,7 @@ int main()
 coming soon
 ```
 
-## 0x02. userfaultfd系统调用
+## 0x02. userfaultfd系统调用（<5.11）
 
 在`Linux`内核版本小于`5.11`时，`userfaultfd`系统调用都可以被普通用户使用。而之所以我们将`userfaultfd`写在条件竞争部分，当然是因为它可以在条件竞争时带来意外的一些好处....
 
@@ -732,8 +732,12 @@ void *uffd_handler(void *args)
         /* Write your code here */
         
         /* Ends here */
+        
+        /* set the return value of copy_from/to_user */
+        page[0] = 0;
+        /* Ends here */
 
-        uffdio_copy.src = (unsigned long long)temp_page_for_stuck;
+        uffdio_copy.src = (unsigned long long)page;
         uffdio_copy.dst = (unsigned long long)msg.arg.pagefault.address &
                           ~(0x1000 - 1);
         uffdio_copy.len = 0x1000;
@@ -751,6 +755,8 @@ void *uffd_handler(void *args)
 
 其中我们要让其处理的代码片段已经在代码中标出。
 
+若需要使得`copy_to_user`或`copy_from_user`能够返回想要的值，则可在缺页中断处理中进行修改，即为其中的`page`。
+
 随后使用如下板子：
 
 ```c
@@ -758,6 +764,9 @@ void *uffd_handler(void *args)
 
 /* 全局变量，触发userfaultfd的地址 */
 char* uffd_addr;
+char* page;
+
+
 
 int main(){
     /* 定义monitor */
@@ -766,6 +775,9 @@ int main(){
     /* 注册userfaultfd */
     uffd_addr = mmap(NULL, 0x1000, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1 , 0);
     register_userfaultfd(&monitor, uffd_addr, 0x1000, (void*)uffd_handler);
+    
+    /* 为缺页处理的新页 */
+    page = (char *)mmap(NULL, 0x1000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 }
 ```
 

