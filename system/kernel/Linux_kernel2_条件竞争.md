@@ -764,7 +764,7 @@ void *uffd_handler(void *args)
 
 /* 全局变量，触发userfaultfd的地址 */
 char* uffd_addr;
-char* page;
+size_t* page;
 
 
 
@@ -777,7 +777,7 @@ int main(){
     register_userfaultfd(&monitor, uffd_addr, 0x1000, (void*)uffd_handler);
     
     /* 为缺页处理的新页 */
-    page = (char *)mmap(NULL, 0x1000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    page = (size_t *)mmap(NULL, 0x1000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 }
 ```
 

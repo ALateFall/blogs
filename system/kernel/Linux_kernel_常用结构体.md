@@ -11,7 +11,7 @@ date: 2024-7-29 14:00:00
 
 [toc]
 
-# 重要结构体
+# 能够利用的结构体
 
 ## 0x00. tty_struct (kmalloc-1k | GFP_KERNEL_ACCOUNT)
 
@@ -283,6 +283,8 @@ ffffffffb6c4b160 T single_start
 
 注意参数不可控，一般可能需要配合`pt_regs`等结构体。
 
+**若需要调试，可以暂停到`seq_read_iter`函数，其会调用`seq_operations->start`**
+
 ## 0x02. user_key_payload (kmalloc-any, GFP_KERNEL)
 
 ### 属性
@@ -524,6 +526,18 @@ struct pipe_buf_operations {
 其`rdi`和`rsi`均可控，`rdi`为`struct pipe_inode_info`，`rsi`为`struct pipe_buffer`。
 
 （因此，或许可以利用`gadget`将栈迁移到`pipe_buffer`。或许可以`push rsi; pop rsp`？）
+
+调试时可以暂停到`pipe_buf_release`。
+
+```
+pipe_release()
+    put_pipe_info()
+        free_pipe_info()
+            pipe_buf_release()
+                pipe_buffer->pipe_buf_operations->release() // it should be anon_pipe_buf_release()
+```
+
+
 
 ## 0x04. msg_msg (kmalloc-any | GFP_KERNEL_ACCOUNT)
 
@@ -1001,7 +1015,7 @@ if (ret < 0)
 
 #### 劫持程序控制流
 
-# 实用结构体/函数
+# 常用结构体/函数
 
 ## 0x00. work_for_cpu_fn函数
 
@@ -1212,4 +1226,46 @@ setxattr("/init", "ltfall", (char*)((size_t)pwn_addr + 0x1000 - 8), 0x20, 0);
 ### 数据泄露 - 泄露内核基地址
 
 ### 劫持程序控制流
+
+
+
+# 常见结构体
+
+## 0x00. cred (cache: cred_jar | size=192, 0xc0)
+
+其定义为如下形式，位于`include/linux/cred.h`。
+
+```c
+struct cred {
+    atomic_t usage;                  /* 引用计数 */
+    kuid_t uid;                      /* 有效用户 ID */
+    kgid_t gid;                      /* 有效组 ID */
+    kuid_t suid;                     /* 保存的用户 ID */
+    kgid_t sgid;                     /* 保存的组 ID */
+    kuid_t euid;                     /* 有效用户 ID */
+    kgid_t egid;                     /* 有效组 ID */
+    kuid_t fsuid;                    /* 文件系统用户 ID */
+    kgid_t fsgid;                    /* 文件系统组 ID */
+    unsigned securebits;             /* 安全位 */
+    kernel_cap_t cap_inheritable;    /* 可继承能力 */
+    kernel_cap_t cap_permitted;      /* 被允许的能力 */
+    kernel_cap_t cap_effective;      /* 生效的能力 */
+    kernel_cap_t cap_bset;           /* 能力的边界集合 */
+    kernel_cap_t cap_ambient;        /* 环境能力 */
+    struct user_struct *user;        /* 与用户相关的结构 */
+    struct group_info *group_info;   /* 组信息 */
+    struct key *session_keyring;     /* 会话密钥环 */
+    struct key *process_keyring;     /* 进程密钥环 */
+    struct key *thread_keyring;      /* 线程密钥环 */
+    struct key *request_key_auth;    /* 请求密钥认证 */
+#ifdef CONFIG_SECURITY
+    void *security;                  /* 安全模块相关的私有数据 */
+#endif
+#ifdef CONFIG_KEYS
+    struct key *user_keyring;        /* 用户密钥环 */
+    struct key *user_ns_keyring;     /* 用户命名空间密钥环 */
+#endif
+    struct rcu_head rcu;             /* 用于 RCU（读取-复制-更新）回收 */
+};
+```
 
