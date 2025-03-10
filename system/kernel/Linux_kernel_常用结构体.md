@@ -316,6 +316,32 @@ ffffffffb6c4b160 T single_start
 
 如此我们可以理清楚`add_key`系统调用的流程。
 
+#### 不被卡住的方法
+
+使用堆喷还是太麻烦了，有的时候我们希望直接将这个结构体像其他结构体那样用来直接使用.
+
+实际上，临时的`obj`和实际`user_key_payload`的`obj`申请的大小存在区别，可以利用该大小的区别来防止临时`obj`卡住。具体来说，临时`obj`申请的大小和传入的参数一样，而实际`user_key_payload`申请的大小则是传入的值加上`0x18`。
+
+例如，我们通过需要申请一个`kmalloc-0x200`的`obj`，此时我们通过如下方式打开`user_key_payload`：
+
+```c
+key_alloc("whatever", "ltfall", 0xf0);
+```
+
+此时，临时的`obj`将会类似于如下方式申请内存：
+
+```c
+kmalloc(0xf0);
+```
+
+而实际上`user_key_payload`使用的`obj`将会类似于如下方式申请内存：
+
+```c
+kmalloc(0xf0 + 0x18); // 0x108
+```
+
+此时，临时的`obj`会从`kmalloc-0x100`申请，而实际的`user_key_payload`从`kmalloc-0x200`申请。
+
 #### 魔数
 
 无
@@ -332,8 +358,8 @@ ffffffffb6c4b160 T single_start
 
 ```c
 struct user_key_payload {
-	struct rcu_head	rcu;		/* RCU destructor */
-	unsigned short	datalen;	/* length of this data */
+	struct rcu_head	rcu;		/* RCU destructor */ // 大小为0x10
+	unsigned short	datalen;	/* length of this data */  // 大小为0x4，对齐后为0x8
 	char		data[] __aligned(__alignof__(u64)); /* actual data */
 };
 ```
@@ -349,6 +375,79 @@ struct callback_head {
 ```
 
 不难得知`user_key_payload`的头部（即`struct rcu_head`和`datalen`）一共为`0x18`字节。剩下的`data[]`数组是保存`payload`本身。
+
+#### CTF板子
+
+笔者直接用了`arttnba3`师傅写好的模板，支持`musl`：
+
+```c
+#define KEY_SPEC_PROCESS_KEYRING	-2	/* - key ID for process-specific keyring */
+#define KEYCTL_UPDATE			2	/* update a key */
+#define KEYCTL_REVOKE			3	/* revoke a key */
+#define KEYCTL_UNLINK			9	/* unlink a key from a keyring */
+#define KEYCTL_READ			11	/* read a key or keyring's contents */
+
+int key_alloc(char *description, void *payload, size_t plen)
+{
+    return syscall(__NR_add_key, "user", description, payload, plen, 
+                   KEY_SPEC_PROCESS_KEYRING);
+}
+
+int key_update(int keyid, void *payload, size_t plen)
+{
+    return syscall(__NR_keyctl, KEYCTL_UPDATE, keyid, payload, plen);
+}
+
+int key_read(int keyid, void *buffer, size_t buflen)
+{
+    return syscall(__NR_keyctl, KEYCTL_READ, keyid, buffer, buflen);
+}
+
+int key_revoke(int keyid)
+{
+    return syscall(__NR_keyctl, KEYCTL_REVOKE, keyid, 0, 0, 0);
+}
+
+int key_unlink(int keyid)
+{
+    return syscall(__NR_keyctl, KEYCTL_UNLINK, keyid, KEY_SPEC_PROCESS_KEYRING);
+}
+```
+
+可以看到包装好了如下函数：
+
+- `key_alloc`
+- `key_update`
+- `key_read`
+- `key_revoke`
+- `key_unlink`
+
+#### 利用UAF配合user_key_payload过程
+
+我们上面已经提到了`user_key_payload`的分配方式。因此我们知道，`user_key_payload`会先申请一个临时的`obj`，因此，若我们通过题目功能`UAF`释放掉一个`obj`，那么打开`user_key_payload`时，`UAF`的`obj`只会作为临时`obj`来临时复制数据。因此，此时我们就可以考虑`heap spray`这样的手法来确保可以分配到`UAF obj`。当然，师傅需要已经了解`slub`的分配和释放过程。
+
+这里相对来说比较复杂，笔者尽量写得详细一些。先来个简略版：
+
+- 通过题目功能申请一个`obj`，然后释放，存在`UAF`，此时题目`UAF obj`位于`kmem_cache_cpu`上
+- 不断堆喷射`user_key_payload`，`UAF obj`总会作为临时`obj`，完成后又回到`kmem_cache_cpu`
+- 直到`kmem_cache_cpu`被完全申请完毕。此时`slub allocator`会从`kmem_cache_node`的`partial`中取出一个链表到`kmem_cache_cpu`，此时`UAF obj`仍然作为临时`obj`，但释放后被放到`kmem_cache_node`的`full`中，并由此放到`kmem_cache_node`的`partial`中
+- 继续不断堆喷射`user_key_payload`，此时一直不会申请到`UAF obj`，直到当前`kmem_cache_cpu`完全耗尽
+- 耗尽后，从`kmem_cache_node`的`partial`中取出一个链表。若此链表为`UAF obj`的链表，则`UAF obj`由于是第二个`obj`，因此不再会作为临时`obj`，而是作为真正的`user_key_payload`。
+
+上面笔者已经大概进行了阐述。比较抽象，对于笔者这样的初学者，笔者初次理解起来也是非常困难的。因此，我们下面直接以一个具体的例子，来看堆喷射是如何将`UAF obj`作为`user_key_payload`，而不是临时`obj`的。
+
+假设`kmem_cache_cpu`此时有三个`obj`，分别为`a -> b -> c`。其中，`a`为我们的`UAF obj`
+
+- 申请一次`user_key_payload`，`a`作为临时`obj`，而`b`作为`user_key_payload`分配。释放`a`，此时`kmem_cache_cpu`为`a -> c`。
+
+- 申请一次`user_key_payload`，`a`作为临时`obj`，而`c`作为`user_key_payload`分配。释放`a`，此时`kmem_cache_cpu`仅剩`a`。
+- 申请一次`user_key_payload`，`a`作为临时`obj`，此时需要再申请一个作为`user_key_payload`，而`kmem_cache_cpu`已经耗光，因此向`kmem_cache_node`申请一条链表挂载到`kmem_cache_cpu`，而原有链表被移动到`kmem_cache_node`的`full`上。设新链表上面有`d -> e -> f`，那么取下`d`作为`user_key_payload`分配。释放`a`，而`a`属于的链表位于`kmem_cache_node`的`full`，因此将`a`作为链表头，将该链表移动到`kmem_cache_node`的`partial`上。
+- 申请一次`user_key_payload`，`e`作为临时`obj`，`f`作为`user_key_payload`分配。释放`e`，此时`kmem_cache_cpu`仅剩`e`。
+- 申请一次`user_key_payload`，`e`作为临时`obj`，此时需要再申请一个`obj`作为`user_key_payload`。此时，我们会从`kmem_cache_node`的`partial`链表中取下一条移动到`kmem_cache_cpu`。若恰好我们取了`a`所在的链表，而`a`是该链表头，因此我们就会取下`a`作为`user_key_payload`。如此一来，我们终于分配`user_key_payload`到了`UAF obj`。
+
+现在，我们就明确了通过堆喷射，来保证`user_key_payload`分配到`UAF obj`的方法了。
+
+一般来说，喷射`40`次足够我们拿到`UAF`的`obj`。
 
 ### 利用
 
@@ -552,7 +651,7 @@ pipe_release()
 
 首先其结构如下所示：
 
-![img](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202410081433135.jpeg)
+
 
 上面左边第一个结构体为`msg_msg`，其大小是我们指定的。若超过一页，则才会继续分配`msg_msgseg`结构体。
 
@@ -561,7 +660,7 @@ pipe_release()
 - 第一个为`struct list_head m_list`，大小为`0x10`。为一个`msg_msg`的双向链表。**该结构体中两个指针不能覆盖为非法地址，否则会发生错误。常见于通过`msg_rev`时，未设置`MSG_COPY`时，其会释放`msg_msg`从而检查这两个字段。**
 - 第二个为`m_type`，其表示消息种类，例如我们发送消息时将其设置为`1`，则接受时也需要设置为`1`。可以任意指定，但不能设置为`0`，笔者暂不清楚原因，只是自己尝试的时候发现设置为`0`时会报错。
 - 第三个为`m_ts`，表示消息的大小。注意，该大小不包括`header`的大小。将该值改大，即可越界读数据来泄露地址。很显然，若`next`指针为`NULL`，那么该值最大为`0x1000 - 0x30`。
-- 第四个为`struct msg_msgseg* next`，指向同一个消息剩下的部分，即为`struct msg_msgseg`。**将该指针劫持为任意地址，可以有两个用法：1. 通过`msg_recv`设置`MSG_COPY`，可以任意地址读；2. 通过`msg_recv`不设置`MSG_COPY`，可以任意地址释放。**但任意地址释放又要注意，需要指针指向的地方为`NULL`才可以。
+- 第四个为`struct msg_msgseg* next`，指向同一个消息剩下的部分，即为`struct msg_msgseg`。**将该指针劫持为任意地址，可以有两个用法：1. 通过`msg_recv`设置`MSG_COPY`，可以任意地址读；2. 通过`msg_recv`不设置`MSG_COPY`，可以任意地址释放。**但任意地址释放又要注意，需要指针指向的地方为`NULL`才可以。此外，也需要该`msg_msgset`为`0x1000`的完整`obj`才可以。
 - 第五个为`void* security`，同样知道不能覆盖即可。
 - 使用`MSG_COPY`标志位时需要注意：1. 使用`MSG_COPY`时的`msgrcv`需要保证读取的字节数完全等于（实际上小于等于即可，但明显我们需要等于）此时的`m_ts`，否则会报错；2. 使用`MSG_COPY`时的`msgrcv`中的第四个参数`m_type`和平常不同，其表示按顺序的第几个消息，而不是像以前那样按序号。
 
@@ -667,6 +766,257 @@ struct msg_msg {
 	/* the actual message follows immediately */
 };
 ```
+
+以及：
+
+```c
+struct list_head{
+    struct msg_msg* next;
+    struct msg_msg* prev;
+}
+```
+
+## 0x04. msg_msg (kmalloc-any | GFP_KERNEL_ACCOUNT)
+
+### 总结
+
+- 修改`m_ts`字段进行越界读写
+- 使用`msgsnd`进行申请，使用`msgrcv`进行释放
+- 使用带有`MSG_COPY`字段的`msgrcv`时，可以不释放并且读取消息内容
+- 修改`next`指针可以完成任意地址释放
+- 结合`userfaultfd`可以完成任意地址写
+
+### 结构体 & 图示
+
+![img](https://ltfallpics.oss-cn-hangzhou.aliyuncs.com/images/202410081433135.jpeg)
+
+`msg_msg`结构体定义如下：
+
+```c
+/* one msg_msg structure for each message */
+struct msg_msg {
+	struct list_head m_list; // 只有一条消息时，指向msg_queue的q_messages
+	long m_type;
+	size_t m_ts;		/* message text size */
+	struct msg_msgseg *next;
+	void *security;
+	/* the actual message follows immediately */
+};
+```
+
+其中每个字段含义如下：
+
+- `m_list`。指向同一个`msg_id`的其他`msg_msg`结构体。每次`msg_snd`都会产生不同的`msg_msg`结构体。**最需要注意的是，`msgrcv`调用时，若不带有`MSG_COPY`的`flag`，会校验`m_list`是否合法。**只需要是合法地址就行，平时将其写为一个其他堆地址也没出错。
+- `m_type`。即为`msg`的类型。一般设置为`>0`的数字。`msgsnd`和`msgrcv`中，若设置为大于`0`的数字则需要相等，表示某一条`msg`。**特别的，当`msgrcv`中带有`MSG_COPY`的标志位时，该`m_type`不再表示某一条信息，而是按顺序`FIFO`的第`m_type`条信息。**
+- `m_ts`。即表示该条`msg`的长度，注意是**不带`header`**的。**覆盖该值为大值，可以实现越界读。**
+- `next`。若`msg`的长度大于`0x1000-0x30`，则会连接一个`struct msg_msgseg`，`next`指向其连接的`msg_msgseg`。**对于`msg_msgseg`，其若为最后一条，则必须为`NULL`。**否则在`msgrcv`的时候会报错。
+
+其中`struct list_head`和`msg_queue`如下：
+
+```c
+struct list_head{
+    struct msg_msg* next;
+    struct msg_msg* prev;
+}
+
+/* one msq_queue structure for each present queue on the system */
+struct msg_queue {
+	struct kern_ipc_perm q_perm;
+	time64_t q_stime;		/* last msgsnd time */
+	time64_t q_rtime;		/* last msgrcv time */
+	time64_t q_ctime;		/* last change time */
+	unsigned long q_cbytes;		/* current number of bytes on queue */
+	unsigned long q_qnum;		/* number of messages in queue */
+	unsigned long q_qbytes;		/* max number of bytes on queue */
+	struct pid *q_lspid;		/* pid of last msgsnd */
+	struct pid *q_lrpid;		/* last receive pid */
+
+	struct list_head q_messages;  // 只有一条消息时，指向msg_msg的m_list
+	struct list_head q_receivers;
+	struct list_head q_senders;
+} __randomize_layout;
+```
+
+### CTF板子
+
+#### 准备工作
+
+一切之前，需要先建立建立队列：
+
+```c
+struct msg_buf{
+    size_t m_type;
+    size_t buf[1]; // 仅仅表示是个数组
+}
+
+
+int msg_id = msgget(IPC_PRIVATE, IPC_CREAT | 0666);
+```
+
+#### 申请
+
+申请`msg_msg`结构体的方法如下所示：
+
+```c
+struct msg_buf* msg = (struct msg_buf*)malloc(0x100);
+
+msg->m_type = 1; // 设置m_type
+msg->buf[0] = 0xdeadbeaf; // 设置内容
+
+// 表示创建了一个0x1000的msg_msg和0x1000的msg_msgseg。因为这个长度是不带header的。
+if(msgsnd(msg_id, msg, 0x1000-0x30 + 0x1000-8, 0) < 0){
+    error("Failed to send msg.");
+    exit(0);
+}
+```
+
+#### 释放
+
+释放如下所示：
+
+```c
+char buffer[0x100];
+
+// size一定要相等
+int res = msgrcv(msg_id, buffer, 0x1000-0x30 + 0x1000-8, 0);
+if(res < 0){
+    error("Failed to recv msg.");
+    exit(0);
+}
+```
+
+释放会使得`msg_msg`和对应的`msg_msgseg`被释放。释放时，会检查`m_list`的两个指针是否合法。
+
+注意，`m_ts`需要严格相等，当大于实际长度时无法获得和释放消息。
+
+**此外，若同一个`msg_id`有多条消息，则每次释放一条，按照`FIFO`的顺序依次释放。**
+
+#### 读取但不释放
+
+使用带有`MSG_COPY`参数的`msgrcv`时，即可使得其不释放`msg_msg`等结构体，并读取内容。注意，此时`m_type`不再表示消息类型，而是表示第`i`条消息。
+
+```c
+char buffer[0x100];
+
+// size一定要相等
+int res = msgrcv(msg_id, buffer, 0x1000-0x30 + 0x1000-8, MSG_COPY | MSG_NOERROR | IPC_PRIVATE);
+if(res < 0){
+    error("Failed to recv msg.");
+    exit(0);
+}
+```
+
+### 结合userfaultfd进行任意地址写
+
+若我们传入的`m_ts`大于`0x1000 - 0x30`，则会申请新的`msg_msgseg`来存储新的内容。
+
+该部分代码位于`load_msg`，如下所示：
+
+```c
+struct msg_msg *load_msg(const void __user *src, size_t len)
+{
+	struct msg_msg *msg;
+	struct msg_msgseg *seg;
+	int err = -EFAULT;
+	size_t alen;
+
+	msg = alloc_msg(len); // 建立好 msg_msg 和 msg_msgseg结构体
+	if (msg == NULL)
+		return ERR_PTR(-ENOMEM);
+
+	alen = min(len, DATALEN_MSG);
+	if (copy_from_user(msg + 1, src, alen)) // 先写msg_msg的部分
+		goto out_err;
+	
+    // 再写msg_msgseg的部分
+	for (seg = msg->next; seg != NULL; seg = seg->next) {
+		len -= alen;
+		src = (char __user *)src + alen;
+		alen = min(len, DATALEN_SEG);
+		if (copy_from_user(seg + 1, src, alen))
+			goto out_err;
+	}
+
+	err = security_msg_msg_alloc(msg);
+	if (err)
+		goto out_err;
+
+	return msg;
+
+out_err:
+	free_msg(msg);
+	return ERR_PTR(err);
+}
+
+static struct msg_msg *alloc_msg(size_t len)
+{
+	struct msg_msg *msg;
+	struct msg_msgseg **pseg;
+	size_t alen;
+
+	alen = min(len, DATALEN_MSG);
+	msg = kmem_buckets_alloc(msg_buckets, sizeof(*msg) + alen, GFP_KERNEL);
+	if (msg == NULL)
+		return NULL;
+
+	msg->next = NULL;
+	msg->security = NULL;
+
+	len -= alen;
+	pseg = &msg->next;
+	while (len > 0) {
+		struct msg_msgseg *seg;
+
+		cond_resched();
+
+		alen = min(len, DATALEN_SEG);
+		seg = kmalloc(sizeof(*seg) + alen, GFP_KERNEL_ACCOUNT);
+		if (seg == NULL)
+			goto out_err;
+		*pseg = seg;
+		seg->next = NULL;
+		pseg = &seg->next;
+		len -= alen;
+	}
+
+	return msg;
+
+out_err:
+	free_msg(msg);
+	return NULL;
+}
+```
+
+从上面可以看到，在`load_msg`函数中，其会先计算大小，并建立好`msg_msg`和`msg_msgseg`结构体，随后再调用两次`copy_from_user`来将数据从用户态拷贝到内核态：先调用`copy_from_user`拷贝`msg_msg`结构体部分，再循环调用`copy_from_user`拷贝`msg_msgseg`结构体部分。这意味着，我们可以利用`userfaultfd`，在`msg_msg`的最后部分将其卡住。此后，若我们能修改`msg_msg`的`next`指针，当`userfaultfd`恢复后，就可以往我们指定的`next`指针处写任意值。
+
+这部分图示见`msg_msg`专题。
+
+### 任意地址释放
+
+在调用`msgrcv`且不带有`MSG_COPY`标志位时，将会释放`msg_msg`及其连接的`msg_msgseg`结构体：
+
+```c
+void free_msg(struct msg_msg *msg)
+{
+	struct msg_msgseg *seg;
+
+	security_msg_msg_free(msg);
+
+	seg = msg->next;
+	kfree(msg);
+	while (seg != NULL) {
+		struct msg_msgseg *tmp = seg->next;
+
+		cond_resched();
+		kfree(seg);
+		seg = tmp;
+	}
+}
+```
+
+若我们能够劫持`next`指针，则会释放与其连接的`obj`。注意，需要保证该`obj`的前`8`位为`NULL`才可以。
+
+此外，在任意地址释放时，无序修改我们劫持的`msg_msg`的`m_ts`字段。如上所示，其释放时并没有对该字段进行检查。因此，**在任意地址释放时，修改其`next`指针即可，无序修改`m_ts`字段，即使其为很小的数例如`0x10`。**
 
 
 
@@ -866,7 +1216,7 @@ static struct ldt_struct *alloc_ldt_struct(unsigned int num_entries)
         }
         page_offset_base += 0x1000000;
     }
-    printf("\033[32m\033[1m[+] Found page_offset_base: \033[0m%llx\n", 
+    printf("\033[32m\033[1m[+] Found page_offset_base: \033[0m%lx\n", 
            page_offset_base);
 
 	/* leak kernel base from direct mappinig area by modify_ldt() */
@@ -881,7 +1231,7 @@ static struct ldt_struct *alloc_ldt_struct(unsigned int num_entries)
     syscall(SYS_modify_ldt, 0, &secondary_startup_64, 8);
     kernel_offset = secondary_startup_64 - SECONDARY_STARTUP_64;
     kernel_base += kernel_offset;
-    printf("\033[34m\033[1m[*]Get addr of secondary_startup_64: \033[0m%llx\n",
+    printf("\033[34m\033[1m[*]Get addr of secondary_startup_64: \033[0m%lx\n",
            secondary_startup_64);
     printf("\033[34m\033[1m[+] kernel_base: \033[0m%llx\n", kernel_base);
     printf("\033[34m\033[1m[+] kernel_offset: \033[0m%llx\n", kernel_offset);
@@ -922,12 +1272,14 @@ static struct ldt_struct *alloc_ldt_struct(unsigned int num_entries)
         search_addr += 0x8000;
     }
 
-    printf("\033[34m\033[1m[+] Obj found at addr: \033[0m%llx\n", result_addr);
+    printf("\033[34m\033[1m[+] Obj found at addr: \033[0m%lx\n", result_addr);
 ```
 
-## 0x06. sk_buff(大于kmalloc-512的任意obj读写)
+## 0x06. sk_buff(大于kmalloc-512的任意obj读写) __GFP_NOMEMALLOC | __**GFP_NOWARN**
 
 类似于`setxattr`，但`sk_buff`功能更强大，但仅适用于`kmalloc-512`以上的`obj`。
+
+（开启`config_memcg_kmem`时，实测该`obj`会与`GFP_KERNEL`隔离）
 
 ### 功能
 
@@ -977,41 +1329,64 @@ if (ret < 0)
 
 
 
-
-
-## 0x00. 
+## 0x07.  shm_file_data (kmalloc-32 | GFP_KERNEL)
 
 ### 属性
 
 #### 总结
 
-- 
+- 原本是在用户态下用于进程间通信，操作共享内存
+- 在`kernel pwn`中，我们用于泄露地址和`0x20`的`obj`分配
 
-#### 打开方式
+#### 分配
 
+定义：
 
+```c
+int shm_fd = shmget(IPC_PRIVATE, 0x1000, IPC_CREAT|0666);
+```
 
-#### 魔数
+随后使用`shmat`系统调用来分配`struct shm_file_data`结构体：
 
+```c
+char* shm_ptr = shmat(shm_fd, NULL, SHM_RDONLY);
+```
 
+#### 释放
+
+使用`shmdt`系统调用释放即可：
+
+```c
+shmdt(shm_ptr);
+```
 
 #### 利用效果
 
-- 
+- 数据泄露，包括堆地址和内核基地址
+- 或者单纯用于分配`obj`
 
 #### 结构体
 
-
+```c
+struct shm_file_data {
+    int id;
+    struct ipc_namespace *ns;
+    struct file *file;
+    const struct vm_operations_struct *vm_ops;
+};
+```
 
 ### 利用
 
 #### 数据泄露 - 内核基地址
 
+`struct shm_file_data`中的`ns`域和`vm_ops`域指向内核的`.text`段，因此可以泄露内核基地址。
 
+其中，`ns`通常指向`init_ipc_ns`
 
 #### 数据泄露 - 堆地址
 
-
+`struct shm_file_data`中的`file`域为一个`file`结构体，位于`direct mapping area`，也就是内核堆上，因此可以泄露内核堆地址。
 
 #### 劫持程序控制流
 
@@ -1124,7 +1499,7 @@ __asm__(
 );
 ```
 
-## 0x02. setxattr系统调用
+## 0x02. setxattr系统调用 GFP_KERNEL
 
 ### 介绍
 
@@ -1133,7 +1508,7 @@ __asm__(
 ```c
 #include <sys/xattr.h>
 
-setxattr("/exploit", "username", value, size);
+setxattr("/exploit", "username", value, size, 0);
 ```
 
 其中:
@@ -1178,6 +1553,11 @@ static long setxattr(struct dentry *d, const char __user *name, const void __use
 而如果只是卡在这里,那该函数将失去控制其内容的能力. 
 
 由此,我们可以利用堆占位技术来使得其既可以使得内容可控, 又随即让`copy_from_user`不再继续往下执行.
+
+**注意：**
+
+- **需要让想写的结构体的内容都位于不会卡住的部分，否则结构体本身就会卡住**
+- **`freelist`的`pointer`也需要位于不会卡住的部分**
 
 我们申请一块连续的两页内存:
 
