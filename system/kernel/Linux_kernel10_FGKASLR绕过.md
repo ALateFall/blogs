@@ -4,7 +4,7 @@ title: 0x0A. Linux kernel基础：FGKASLR及其绕过方式
 category: kernel pwn
 date: 2025-3-03 12:00:00
 ---
-别开这个保护算我求你
+绕过fgkaslr以防止fgkaslr对kaslr的绕过的防御：）
 <!-- more -->
 
 
